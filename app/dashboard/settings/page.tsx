@@ -1,8 +1,21 @@
 import { KeyRound, ShieldCheck, Store, WandSparkles } from "lucide-react";
+import { EbayConnectPanel } from "@/components/ebay/EbayConnectPanel";
 import { SettingsSection } from "@/components/settings/SettingsSection";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
+import { getEbayAccount } from "@/lib/ebay/account";
+import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 
-export default function SettingsPage() {
+export default async function SettingsPage({
+  searchParams
+}: {
+  searchParams?: { ebay?: string; message?: string };
+}) {
+  const account = await loadEbayAccount();
+  const statusMessage =
+    searchParams?.ebay === "connected"
+      ? "eBay sandbox connected. Sync policies and setup an inventory location before publishing."
+      : searchParams?.message;
+
   return (
     <div className="space-y-6">
       <div>
@@ -12,10 +25,38 @@ export default function SettingsPage() {
         </p>
       </div>
 
+      <EbayConnectPanel
+        statusMessage={statusMessage}
+        connected={account?.status === "connected"}
+        paymentPolicy={account?.payment_policy_name ?? account?.payment_policy_id}
+        returnPolicy={account?.return_policy_name ?? account?.return_policy_id}
+        fulfillmentPolicy={account?.fulfillment_policy_name ?? account?.fulfillment_policy_id}
+        inventoryLocation={account?.inventory_location_name ?? account?.inventory_location_key}
+      />
+
       <SettingsSection title="eBay account" description="OAuth and sandbox policy configuration.">
-        <SettingRow icon={<Store size={18} />} label="Connection" value="Sandbox not connected" tone="warning" />
-        <SettingRow icon={<ShieldCheck size={18} />} label="Policies" value="Payment, return, fulfillment missing" tone="warning" />
-        <SettingRow icon={<Store size={18} />} label="Inventory location" value="Missing" tone="warning" />
+        <SettingRow
+          icon={<Store size={18} />}
+          label="Connection"
+          value={account?.status === "connected" ? "Sandbox connected" : "Sandbox not connected"}
+          tone={account?.status === "connected" ? "success" : "warning"}
+        />
+        <SettingRow
+          icon={<ShieldCheck size={18} />}
+          label="Policies"
+          value={
+            account?.payment_policy_id && account.return_policy_id && account.fulfillment_policy_id
+              ? "Payment, return, fulfillment loaded"
+              : "Payment, return, fulfillment missing"
+          }
+          tone={account?.payment_policy_id && account.return_policy_id && account.fulfillment_policy_id ? "success" : "warning"}
+        />
+        <SettingRow
+          icon={<Store size={18} />}
+          label="Inventory location"
+          value={account?.inventory_location_key ?? "Missing"}
+          tone={account?.inventory_location_key ? "success" : "warning"}
+        />
       </SettingsSection>
 
       <SettingsSection title="AI provider" description="OpenAI, Groq, and Claude-compatible provider abstraction.">
@@ -34,6 +75,23 @@ export default function SettingsPage() {
       </SettingsSection>
     </div>
   );
+}
+
+async function loadEbayAccount() {
+  if (!hasSupabaseServerEnv()) {
+    return null;
+  }
+
+  const supabase = createSupabaseServerClient();
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return null;
+  }
+
+  return getEbayAccount({ supabase, userId: user.id });
 }
 
 function SettingRow({

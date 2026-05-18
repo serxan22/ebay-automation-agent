@@ -7,6 +7,7 @@ export interface EbayOfferInput {
   format?: "FIXED_PRICE";
   availableQuantity: number;
   categoryId: string;
+  listingDescription: string;
   price: number;
   currency: string;
   merchantLocationKey: string;
@@ -39,7 +40,8 @@ export async function createOffer(accessToken: string, input: EbayOfferInput) {
       format: input.format ?? "FIXED_PRICE",
       availableQuantity: input.availableQuantity,
       categoryId: input.categoryId,
-      listingDescription: "",
+      listingDescription: input.listingDescription,
+      includeCatalogProductDetails: false,
       pricingSummary: {
         price: {
           value: input.price.toFixed(2),

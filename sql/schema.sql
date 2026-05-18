@@ -147,7 +147,14 @@ create table if not exists public.listing_drafts (
   optimized_image_urls text[] not null default '{}',
   status draft_status not null default 'draft',
   ai_generated boolean not null default true,
+  ebay_offer_id text,
+  ebay_item_id text,
+  ebay_sku text,
   error_message text,
+  ebay_error_code text,
+  ebay_error_json jsonb not null default '{}',
+  publish_attempts integer not null default 0 check (publish_attempts >= 0),
+  last_publish_attempt_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -160,13 +167,24 @@ create table if not exists public.ebay_accounts (
   access_token_encrypted text,
   refresh_token_encrypted text,
   token_expires_at timestamptz,
+  refresh_token_expires_at timestamptz,
+  oauth_scopes text[] not null default '{}',
+  last_token_refresh_at timestamptz,
   payment_policy_id text,
+  payment_policy_name text,
   return_policy_id text,
+  return_policy_name text,
   fulfillment_policy_id text,
+  fulfillment_policy_name text,
   inventory_location_key text,
+  inventory_location_name text,
+  inventory_location_status text,
+  last_policy_sync_at timestamptz,
+  last_location_sync_at timestamptz,
   status text not null default 'disconnected',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  unique (user_id, marketplace)
 );
 
 create table if not exists public.ebay_listings (
@@ -255,6 +273,8 @@ create index if not exists supplier_products_user_supplier_idx on public.supplie
 create index if not exists supplier_products_category_idx on public.supplier_products(category);
 create index if not exists product_analysis_product_idx on public.product_analysis(supplier_product_id);
 create index if not exists listing_drafts_user_status_idx on public.listing_drafts(user_id, status);
+create index if not exists listing_drafts_user_publish_idx on public.listing_drafts(user_id, last_publish_attempt_at desc);
+create index if not exists ebay_accounts_user_marketplace_idx on public.ebay_accounts(user_id, marketplace);
 create index if not exists agent_tasks_user_status_idx on public.agent_tasks(user_id, status);
 create index if not exists automation_logs_user_created_idx on public.automation_logs(user_id, created_at desc);
 create index if not exists reports_user_created_idx on public.reports(user_id, created_at desc);

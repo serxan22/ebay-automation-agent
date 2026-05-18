@@ -23,6 +23,10 @@ export function buildEbayOAuthUrl(state: string) {
   return url.toString();
 }
 
+export function getEbayOAuthScopes() {
+  return [...scopes];
+}
+
 export async function exchangeEbayCodeForTokens(code: string) {
   const config = getEbayConfig();
   const basic = Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64");
@@ -48,6 +52,7 @@ export async function exchangeEbayCodeForTokens(code: string) {
     refresh_token: string;
     expires_in: number;
     refresh_token_expires_in: number;
+    scope?: string;
   };
 }
 

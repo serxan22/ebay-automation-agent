@@ -120,6 +120,7 @@ export interface ListingGenerationResult {
 
 export interface ListingDraft {
   id?: string;
+  userId?: string;
   supplierProductId: string;
   analysisId?: string | null;
   ebayTitle: string;
@@ -132,6 +133,13 @@ export interface ListingDraft {
   optimizedImageUrls: string[];
   status: ListingDraftStatus;
   aiGenerated: boolean;
+  ebayOfferId?: string | null;
+  ebayItemId?: string | null;
+  ebaySku?: string | null;
+  errorMessage?: string | null;
+  ebayErrorCode?: string | null;
+  publishAttempts?: number;
+  lastPublishAttemptAt?: string | null;
 }
 
 export interface AgentTaskResult {

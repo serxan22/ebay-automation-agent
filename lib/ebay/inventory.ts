@@ -9,6 +9,7 @@ export interface InventoryItemInput {
   imageUrls: string[];
   condition: string;
   aspects: Record<string, string | string[]>;
+  brand?: string;
 }
 
 export async function createOrReplaceInventoryItem(accessToken: string, input: InventoryItemInput) {
@@ -35,7 +36,8 @@ export async function createOrReplaceInventoryItem(accessToken: string, input: I
         title: input.title,
         description: input.description,
         imageUrls: input.imageUrls,
-        aspects: input.aspects
+        aspects: input.aspects,
+        brand: input.brand
       }
     }
   });

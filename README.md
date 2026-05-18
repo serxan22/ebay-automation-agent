@@ -15,7 +15,7 @@ This implementation builds the foundation only:
 - Manual approval listing draft flow
 - Telegram, eBay, and cron skeletons
 
-Production eBay publishing, full Telegram execution, daily automation, supplier API sync, order tracking, and full auto mode belong to later phases.
+Phase 2 now adds eBay sandbox OAuth, encrypted token storage, token refresh, seller policy sync, inventory location setup, and sandbox publish flow for manually approved drafts. Production eBay publishing remains disabled.
 
 ## Install
 
@@ -107,13 +107,16 @@ Phase 1 creates manual-review listing drafts only. The AI listing generator:
 
 ## eBay Sandbox
 
-The eBay OAuth and Inventory API skeletons are in:
+The eBay OAuth and Inventory API integration is in:
 
 - `lib/ebay/oauth.ts`
 - `lib/ebay/client.ts`
 - `lib/ebay/inventory.ts`
 - `lib/ebay/offers.ts`
 - `lib/ebay/policies.ts`
+- `lib/ebay/locations.ts`
+- `lib/ebay/account.ts`
+- `lib/ebay/publish.ts`
 
 Start OAuth at:
 
@@ -121,7 +124,24 @@ Start OAuth at:
 /api/ebay/oauth
 ```
 
-Phase 2 should persist encrypted tokens into `ebay_accounts`, fetch seller policies, create inventory locations, and publish approved sandbox drafts.
+Sandbox publishing flow:
+
+1. Connect eBay from `/dashboard/settings`.
+2. Run `sql/phase2_ebay_sandbox.sql` if your Supabase database was created before Phase 2.
+3. Click `Sync seller policies` to load payment, return, and fulfillment policies from the sandbox Account API.
+4. Click `Setup location` to create/check a warehouse inventory location.
+5. Ensure a listing draft has a valid `ebay_category_id`, item specifics, price, quantity, and at least one image URL.
+6. Click `Publish sandbox` from `/dashboard/listings`.
+
+The publish flow calls:
+
+- `createOrReplaceInventoryItem`
+- `createOffer`
+- `publishOffer`
+
+All eBay API failures are saved to `listing_drafts.error_message`, `listing_drafts.ebay_error_code`, `listing_drafts.ebay_error_json`, and `automation_logs`.
+
+Production is intentionally blocked in Phase 2. Keep `EBAY_ENVIRONMENT=sandbox`; setting it to `production` will return a clear error.
 
 ## Telegram Bot
 

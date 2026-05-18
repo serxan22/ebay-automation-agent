@@ -1,4 +1,4 @@
-import { EbayIntegrationError } from "@/lib/ebay/errors";
+import { classifyEbayError, EbayIntegrationError, getEbayErrorRecommendation, stringifyEbayPayload } from "@/lib/ebay/errors";
 
 export interface EbayConfig {
   clientId: string;
@@ -12,6 +12,15 @@ export function getEbayConfig(): EbayConfig {
   const clientId = process.env.EBAY_CLIENT_ID;
   const clientSecret = process.env.EBAY_CLIENT_SECRET;
   const redirectUri = process.env.EBAY_REDIRECT_URI;
+  const requestedEnvironment = process.env.EBAY_ENVIRONMENT ?? "sandbox";
+
+  if (requestedEnvironment === "production") {
+    throw new EbayIntegrationError(
+      "Production eBay publishing is disabled in Phase 2.",
+      "PRODUCTION_DISABLED",
+      getEbayErrorRecommendation("PRODUCTION_DISABLED")
+    );
+  }
 
   if (!clientId || !clientSecret || !redirectUri) {
     throw new EbayIntegrationError(
@@ -25,7 +34,7 @@ export function getEbayConfig(): EbayConfig {
     clientId,
     clientSecret,
     redirectUri,
-    environment: process.env.EBAY_ENVIRONMENT === "production" ? "production" : "sandbox",
+    environment: "sandbox",
     marketplaceId: process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US"
   };
 }
@@ -47,7 +56,7 @@ export async function ebayFetch<T>({
   body?: unknown;
   marketplaceId?: string;
 }): Promise<T> {
-  const environment = process.env.EBAY_ENVIRONMENT === "production" ? "production" : "sandbox";
+  const environment = getEbayConfig().environment;
   const response = await fetch(`${getEbayApiBaseUrl(environment)}${path}`, {
     method,
     headers: {
@@ -59,17 +68,16 @@ export async function ebayFetch<T>({
     body: body ? JSON.stringify(body) : undefined
   });
 
-  if (response.status === 401) {
-    throw new EbayIntegrationError("eBay token expired or unauthorized.", "TOKEN_EXPIRED");
-  }
-
-  if (response.status === 429) {
-    throw new EbayIntegrationError("eBay API rate limit reached.", "RATE_LIMIT");
-  }
-
   if (!response.ok) {
-    const text = await response.text();
-    throw new EbayIntegrationError(`eBay API request failed: ${text}`, "PUBLISH_FAILED");
+    const payload = await readEbayErrorPayload(response);
+    const code = classifyEbayError(response.status, payload);
+    throw new EbayIntegrationError(
+      `eBay API request failed (${response.status}): ${summarizeEbayError(payload)}`,
+      code,
+      getEbayErrorRecommendation(code),
+      payload,
+      response.status
+    );
   }
 
   if (response.status === 204) {
@@ -77,4 +85,23 @@ export async function ebayFetch<T>({
   }
 
   return (await response.json()) as T;
+}
+
+async function readEbayErrorPayload(response: Response) {
+  const text = await response.text();
+
+  if (!text) {
+    return { status: response.status, statusText: response.statusText };
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function summarizeEbayError(payload: unknown) {
+  const text = stringifyEbayPayload(payload);
+  return text.length > 600 ? `${text.slice(0, 600)}...` : text;
 }

@@ -1,5 +1,6 @@
-import { BadgeCheck, CircleAlert, FileText, Send } from "lucide-react";
+import { BadgeCheck, CircleAlert, FileText } from "lucide-react";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
+import { PublishDraftButton } from "@/components/listings/PublishDraftButton";
 import { Button } from "@/components/ui/Button";
 import type { ListingDraft } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils/format";
@@ -30,10 +31,14 @@ export function ListingDraftCard({ draft }: { draft: ListingDraft }) {
         <Button variant="secondary">
           <CircleAlert size={16} /> Revise
         </Button>
-        <Button variant="ghost">
-          <Send size={16} /> Publish later
-        </Button>
+        <PublishDraftButton draftId={draft.id} disabled={draft.status === "published" || draft.status === "rejected"} />
       </div>
+      {draft.errorMessage ? (
+        <div className="mt-4 rounded-md border border-coral-200 bg-coral-50 p-3 text-sm text-coral-800 dark:border-coral-500/20 dark:bg-coral-500/10 dark:text-coral-200">
+          {draft.ebayErrorCode ? `${draft.ebayErrorCode}: ` : ""}
+          {draft.errorMessage}
+        </div>
+      ) : null}
     </div>
   );
 }
