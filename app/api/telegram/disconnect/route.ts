@@ -1,21 +1,10 @@
 import { NextResponse } from "next/server";
 import { logAutomationEvent } from "@/lib/automation/logging";
-import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
+import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 
 export async function POST() {
   try {
-    if (!hasSupabaseServerEnv()) {
-      return NextResponse.json({ error: "Supabase is not configured." }, { status: 400 });
-    }
-
-    const supabase = createSupabaseServerClient();
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
-    }
+    const { supabase, user } = await getAuthenticatedApiContext();
 
     const { error } = await supabase
       .from("telegram_connections")
@@ -36,6 +25,11 @@ export async function POST() {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+    if (authResponse) {
+      return authResponse;
+    }
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to disconnect Telegram." },
       { status: 400 }

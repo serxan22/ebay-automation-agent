@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { generateListing } from "@/lib/ai/generate-listing";
 import { createListingDraft } from "@/lib/products/create-listing-draft";
+import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 import type { AutomationSettings, ProductAnalysis, SupplierProduct } from "@/lib/types";
 
 const createDraftSchema = z.object({
@@ -13,6 +14,7 @@ const createDraftSchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    await getAuthenticatedApiContext();
     const payload = createDraftSchema.parse(await request.json());
     const generatedListing = await generateListing({
       product: payload.product,
@@ -28,6 +30,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ draft, generatedListing });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+    if (authResponse) {
+      return authResponse;
+    }
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Listing draft creation failed." },
       { status: 400 }

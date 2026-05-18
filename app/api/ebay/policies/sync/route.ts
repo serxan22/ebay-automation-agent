@@ -3,26 +3,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { normalizePublishError } from "@/lib/ebay/publish";
 import { syncSellerPolicies } from "@/lib/ebay/policies";
-import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
+import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 
 export async function POST() {
   let supabase: SupabaseClient | null = null;
   let userId: string | null = null;
 
   try {
-    if (!hasSupabaseServerEnv()) {
-      return NextResponse.json({ error: "Supabase is not configured." }, { status: 400 });
-    }
-
-    supabase = createSupabaseServerClient();
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
-    }
-
+    const context = await getAuthenticatedApiContext();
+    supabase = context.supabase;
+    const user = context.user;
     userId = user.id;
     const result = await syncSellerPolicies({
       supabase,
@@ -35,6 +25,11 @@ export async function POST() {
       account: result.account
     });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+    if (authResponse) {
+      return authResponse;
+    }
+
     const normalized = normalizePublishError(error);
 
     if (supabase && userId) {

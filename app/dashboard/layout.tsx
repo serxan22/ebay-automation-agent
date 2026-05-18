@@ -11,6 +11,8 @@ import {
   Store,
   Workflow
 } from "lucide-react";
+import { LogoutButton } from "@/components/auth/LogoutButton";
+import { requireUser } from "@/lib/supabase/auth";
 
 const navItems = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
@@ -23,7 +25,9 @@ const navItems = [
   { href: "/dashboard/settings", label: "Settings", icon: Settings }
 ];
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const user = await requireUser();
+
   return (
     <div className="min-h-screen bg-ink-50 dark:bg-ink-950">
       <aside className="fixed inset-y-0 left-0 hidden w-72 border-r border-ink-200 bg-white/90 p-5 backdrop-blur dark:border-white/10 dark:bg-ink-950/90 lg:block">
@@ -73,9 +77,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </p>
               <h1 className="text-xl font-semibold text-ink-950 dark:text-white">Automation control center</h1>
             </div>
-            <div className="flex items-center gap-2 rounded-md border border-ink-200 bg-white px-3 py-2 text-sm text-ink-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-300">
-              <span className="size-2 rounded-full bg-amber-500" />
-              Sandbox publishing locked
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="hidden rounded-md border border-ink-200 bg-white px-3 py-2 text-sm text-ink-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-300 md:block">
+                {user.email}
+              </div>
+              <div className="flex items-center gap-2 rounded-md border border-ink-200 bg-white px-3 py-2 text-sm text-ink-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-300">
+                <span className="size-2 rounded-full bg-amber-500" />
+                Sandbox publishing locked
+              </div>
+              <LogoutButton />
             </div>
           </div>
         </header>

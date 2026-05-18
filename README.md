@@ -72,6 +72,36 @@ Required for AI providers:
 
 Every user-owned table has RLS enabled so users can only access rows where `auth.uid() = user_id`.
 
+## Local Auth Setup
+
+The app uses Supabase Auth email/password.
+
+1. In Supabase, open `Authentication > Providers`.
+2. Enable `Email`.
+3. Enable email/password signups if you want users to create accounts from `/login`.
+4. For local development, add these auth URLs in Supabase:
+
+```text
+Site URL: http://localhost:3000
+Redirect URL: http://localhost:3000/auth/callback
+```
+
+5. Add Supabase env vars to `.env.local`:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+```
+
+6. Start the app and open `/login`.
+
+```bash
+npm run dev
+```
+
+The login page supports login and signup on the same screen. If email confirmation is enabled in Supabase, signup will ask the user to confirm their email before signing in. Dashboard pages redirect unauthenticated users to `/login`, and protected dashboard API routes return `401` JSON when there is no active session.
+
 ## Supplier CSV Import
 
 The `/dashboard/suppliers` page includes a CSV importer with editable column mapping.

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { analyzeProduct } from "@/lib/products/analyze-product";
+import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 import type { AutomationSettings, SupplierProduct } from "@/lib/types";
 
 const supplierProductSchema = z.object({
@@ -57,6 +58,7 @@ const analyzeRequestSchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    await getAuthenticatedApiContext();
     const payload = analyzeRequestSchema.parse(await request.json());
     const analysis = analyzeProduct({
       product: payload.product as SupplierProduct,
@@ -65,6 +67,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ analysis });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+    if (authResponse) {
+      return authResponse;
+    }
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Product analysis failed." },
       { status: 400 }

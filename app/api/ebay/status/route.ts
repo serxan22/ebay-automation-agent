@@ -1,21 +1,10 @@
 import { NextResponse } from "next/server";
 import { getEbayAccount } from "@/lib/ebay/account";
-import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
+import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 
 export async function GET() {
   try {
-    if (!hasSupabaseServerEnv()) {
-      return NextResponse.json({ connected: false, reason: "Supabase is not configured." });
-    }
-
-    const supabase = createSupabaseServerClient();
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ connected: false, reason: "Authentication is required." }, { status: 401 });
-    }
+    const { supabase, user } = await getAuthenticatedApiContext();
 
     const account = await getEbayAccount({ supabase, userId: user.id });
 
@@ -34,6 +23,11 @@ export async function GET() {
         : null
     });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+    if (authResponse) {
+      return authResponse;
+    }
+
     return NextResponse.json(
       { connected: false, error: error instanceof Error ? error.message : "Unable to load eBay status." },
       { status: 400 }

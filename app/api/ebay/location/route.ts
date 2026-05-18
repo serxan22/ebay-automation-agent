@@ -5,7 +5,7 @@ import { logAutomationEvent } from "@/lib/automation/logging";
 import { ensureInventoryLocation, getInventoryLocations } from "@/lib/ebay/locations";
 import { getValidEbayAccessToken } from "@/lib/ebay/account";
 import { normalizePublishError } from "@/lib/ebay/publish";
-import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
+import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 
 const locationSchema = z.object({
   merchantLocationKey: z.string().min(3).max(50).optional(),
@@ -32,6 +32,11 @@ export async function GET() {
 
     return NextResponse.json({ ok: true, locations: locations.locations ?? [] });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+    if (authResponse) {
+      return authResponse;
+    }
+
     const normalized = normalizePublishError(error);
 
     if (supabase && userId) {
@@ -70,6 +75,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, location: result.location, account: result.account });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+    if (authResponse) {
+      return authResponse;
+    }
+
     const normalized = normalizePublishError(error);
 
     if (supabase && userId) {
@@ -97,18 +107,6 @@ export async function POST(request: Request) {
 }
 
 async function getContext() {
-  if (!hasSupabaseServerEnv()) {
-    throw new Error("Supabase is not configured.");
-  }
-
-  const supabase = createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    throw new Error("Authentication is required.");
-  }
-
+  const { supabase, user } = await getAuthenticatedApiContext();
   return { supabase, userId: user.id };
 }
