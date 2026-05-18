@@ -70,11 +70,23 @@ export async function executeTelegramIntentAction({
   userId: string;
   intent: TelegramIntent;
 }): Promise<AgentTaskResult> {
-  if (intent.requiresConfirmation) {
+  if (intent.intent === "ASK_CLARIFICATION" || intent.intent === "UNKNOWN") {
     return {
       ok: false,
-      message: intent.clarificationQuestion ?? "Confirmation is required before this action can run.",
-      warnings: intent.safetyNotes
+      message:
+        intent.safe_response ||
+        intent.clarifying_question ||
+        "I need a little more detail before I can safely run that."
+    };
+  }
+
+  if (intent.needs_confirmation || !intent.should_execute) {
+    return {
+      ok: false,
+      message:
+        intent.clarifying_question ??
+        intent.safe_response ??
+        "Confirmation is required before this action can run."
     };
   }
 
@@ -88,7 +100,7 @@ export async function executeTelegramIntentAction({
     case "RESUME_AUTOMATION":
       return updateAutomationToggle({ supabase, userId, enabled: true });
     case "CHANGE_DAILY_LIMIT":
-      return changeDailyLimit({ supabase, userId, value: getNumber(intent.parameters.daily_listing_limit ?? intent.parameters.quantity) });
+      return changeDailyLimit({ supabase, userId, value: getNumber(intent.parameters.quantity) });
     case "CHANGE_MIN_MARGIN":
       return changeMinMargin({ supabase, userId, value: getNumber(intent.parameters.min_margin_percentage) });
     case "FIND_PRODUCTS":
@@ -106,21 +118,30 @@ export async function executeTelegramIntentAction({
         supabase,
         userId,
         field: "blocked_categories",
-        value: getString(intent.parameters.category)
+        value: getString(intent.parameters.blocked_category ?? intent.parameters.category)
       });
     case "UPDATE_BLOCKED_BRAND":
       return updateBlockedArray({
         supabase,
         userId,
         field: "blocked_brands",
-        value: getString(intent.parameters.brand)
+        value: getString(intent.parameters.blocked_brand)
       });
     case "CHANGE_APPROVAL_MODE":
       return changeApprovalMode({ supabase, userId, value: getString(intent.parameters.approval_mode) });
+    case "EXPLAIN_SYSTEM":
+      return explainSystem({
+        supabase,
+        userId,
+        question: getString(intent.parameters.user_question)
+      });
     default:
       return {
         ok: false,
-        message: intent.clarificationQuestion ?? "I could not understand the requested action."
+        message:
+          intent.safe_response ||
+          intent.clarifying_question ||
+          "I could not understand the requested action."
       };
   }
 }
@@ -141,7 +162,7 @@ async function showStatus({ supabase, userId }: ActionContext) {
 
   return {
     ok: true,
-    message: `Status: automation ${settings.autoListingEnabled ? "enabled" : "paused"}, approval mode ${settings.approvalMode}, daily limit ${settings.dailyListingLimit}, min margin ${settings.minMarginPercentage}%. Suppliers ${suppliers.count ?? 0}, products ${products.count ?? 0}, active drafts ${activeDrafts}, failed tasks today ${failedTasks}. eBay ${ebay.data?.status ?? "not connected"} (${ebay.data?.marketplace ?? "sandbox"}).`
+    message: `Status: automation ${settings.autoListingEnabled ? "aktivdir" : "dayandırılıb"}, daily limit ${settings.dailyListingLimit}, min margin ${settings.minMarginPercentage}%, approval mode ${settings.approvalMode}. Suppliers ${suppliers.count ?? 0}, products ${products.count ?? 0}, active drafts ${activeDrafts}, failed tasks today ${failedTasks}. eBay ${ebay.data?.status ?? "not connected"} (${ebay.data?.marketplace ?? "sandbox"}).`
   };
 }
 
@@ -183,7 +204,9 @@ async function updateAutomationToggle({ supabase, userId, enabled }: ActionConte
 
   return {
     ok: true,
-    message: enabled ? "Automation resumed. Saved rules and safety checks remain active." : "Automation paused. No automatic listing tasks will run."
+    message: enabled
+      ? "Automation aktiv edildi. Saved rules əsasında işləyəcək."
+      : "Automation dayandırıldı. Mən artıq auto-listing etməyəcəm."
   };
 }
 
@@ -411,6 +434,95 @@ async function showFailedTasks({ supabase, userId }: ActionContext) {
     ]
       .slice(0, 6)
       .join("\n")
+  };
+}
+
+async function explainSystem({
+  supabase,
+  userId,
+  question
+}: ActionContext & {
+  question?: string;
+}) {
+  const settings = await getAutomationSettings(supabase, userId);
+  const [suppliers, products, drafts, logs] = await Promise.all([
+    supabase.from("suppliers").select("id,name,status,allows_dropshipping").eq("user_id", userId).limit(25),
+    supabase.from("supplier_products").select("id,supplier_id").eq("user_id", userId).limit(1000),
+    supabase.from("listing_drafts").select("status").eq("user_id", userId).limit(500),
+    supabase
+      .from("automation_logs")
+      .select("level,module,message,created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(8)
+  ]);
+
+  if (suppliers.error) {
+    throw new Error(suppliers.error.message);
+  }
+
+  if (products.error) {
+    throw new Error(products.error.message);
+  }
+
+  if (drafts.error) {
+    throw new Error(drafts.error.message);
+  }
+
+  if (logs.error) {
+    throw new Error(logs.error.message);
+  }
+
+  const supplierRows = (suppliers.data ?? []) as Array<{
+    id: string;
+    name: string;
+    status: string;
+    allows_dropshipping: boolean;
+  }>;
+  const productRows = (products.data ?? []) as Array<{ supplier_id: string }>;
+  const draftRows = (drafts.data ?? []) as Array<{ status: string }>;
+  const logRows = (logs.data ?? []) as Array<{ level: string; module: string; message: string }>;
+  const activeSuppliers = supplierRows.filter((supplier) => supplier.status === "active" && supplier.allows_dropshipping).length;
+  const failedDrafts = draftRows.filter((draft) => draft.status === "failed").length;
+  const recentProblem = logRows.find((log) => log.level === "error" || log.level === "warning");
+  const supplierProductCounts = supplierRows
+    .map((supplier) => ({
+      name: supplier.name,
+      count: productRows.filter((product) => product.supplier_id === supplier.id).length,
+      status: supplier.status,
+      allowed: supplier.allows_dropshipping
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  if (question && /supplier|təchizat|techizat|hansi|hansı|better|yaxsi|yaxşı/i.test(question)) {
+    const best = supplierProductCounts[0];
+
+    return {
+      ok: true,
+      message: best
+        ? `Supplier baxımından ən güclü namizəd hazırda ${best.name}: ${best.count} imported products, status ${best.status}, dropshipping ${
+            best.allowed ? "allowed" : "not confirmed"
+          }. Daha dəqiq qərar üçün sales və failure history Phase 5-də stock/order sync ilə güclənəcək.`
+        : "Hələ supplier data yoxdur. Approved wholesale supplier CSV upload etdikdən sonra müqayisə edə bilərəm."
+    };
+  }
+
+  if (question && /problem|xeta|xəta|hata|issue|niye|niyə/i.test(question)) {
+    return {
+      ok: true,
+      message: recentProblem
+        ? `Əsas problem kimi son log görünür: ${recentProblem.module} - ${recentProblem.message}. Failed drafts: ${failedDrafts}. Automation ${
+            settings.autoListingEnabled ? "aktivdir" : "dayandırılıb"
+          }.`
+        : `Kritik problem görünmür. Automation ${settings.autoListingEnabled ? "aktivdir" : "dayandırılıb"}, active approved suppliers ${activeSuppliers}, failed drafts ${failedDrafts}.`
+    };
+  }
+
+  return {
+    ok: true,
+    message: `Sadə izah: mən approved supplier məhsullarını analiz edirəm, profit/risk qaydalarına uyğun olanlardan draft yaradıram və yalnız sandbox eBay publish flow istifadə edirəm. Current rules: automation ${
+      settings.autoListingEnabled ? "aktivdir" : "dayandırılıb"
+    }, daily limit ${settings.dailyListingLimit}, min margin ${settings.minMarginPercentage}%, approval mode ${settings.approvalMode}. Production publishing bağlıdır.`
   };
 }
 

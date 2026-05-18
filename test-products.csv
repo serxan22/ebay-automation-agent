@@ -1,0 +1,4 @@
+title,description,supplier_sku,brand,category,supplier_price,shipping_cost,stock_quantity,product_url,image_url_1,shipping_days,country,currency
+LED Desk Lamp,Adjustable LED desk lamp for home office,SKU-001,Generic,Home Office,12.50,4.00,25,https://example.com/lamp,https://picsum.photos/800/800,4,US,USD
+Kitchen Storage Rack,Multi-layer kitchen storage rack,SKU-002,Generic,Kitchen,18.00,5.00,18,https://example.com/rack,https://picsum.photos/801/801,5,US,USD
+Phone Stand,Adjustable phone stand for desk,SKU-003,Generic,Accessories,3.50,2.00,100,https://example.com/stand,https://picsum.photos/802/802,3,US,USD

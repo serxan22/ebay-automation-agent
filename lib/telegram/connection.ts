@@ -99,7 +99,7 @@ export async function connectTelegramChatWithCode({
       user_id: userId,
       telegram_chat_id: chatId,
       telegram_username: username,
-      preferred_language: language === "unknown" ? "en" : language,
+      preferred_language: language === "mixed" ? "az" : language,
       last_message_at: now,
       status: "active"
     },
@@ -165,7 +165,7 @@ export async function touchTelegramConnection({
     .from("telegram_connections")
     .update({
       last_message_at: new Date().toISOString(),
-      preferred_language: language === "unknown" ? "en" : language
+      preferred_language: language === "mixed" ? "az" : language
     })
     .eq("telegram_chat_id", chatId);
 }

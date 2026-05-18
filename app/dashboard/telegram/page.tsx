@@ -4,21 +4,24 @@ import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { TelegramConnectionPanel } from "@/components/telegram/TelegramConnectionPanel";
 import { TelegramMessagePreview } from "@/components/telegram/TelegramMessagePreview";
 import { getTelegramBotMe } from "@/lib/telegram/bot";
+import { getTelegramAiParserStatus } from "@/lib/telegram/intent-parser";
 import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
 const samples = [
-  "Find 20 profitable products today and list them on eBay.",
-  "Only list products with at least 25% margin.",
-  "Bugün 20 məhsul tap və yerləşdir.",
-  "Do not list branded electronics.",
-  "Show me today's report."
+  "qaqa automationu aktiv et",
+  "bugün 10 dənə yaxşı məhsul tap, riskli şeyləri list eləmə",
+  "minimum profit 20 faiz olsun",
+  "safe olan 5 draftı sandbox ebaydə publish elə",
+  "electronics kateqoriyasını blokla",
+  "mənə insan kimi izah et"
 ];
 
 export default async function TelegramPage() {
   const { connection, tasks, logs } = await loadTelegramDashboardData();
   const bot = await getTelegramBotMe().catch(() => null);
+  const parserStatus = getTelegramAiParserStatus();
 
   return (
     <div className="space-y-6">
@@ -26,7 +29,7 @@ export default async function TelegramPage() {
         <div>
           <h2 className="text-2xl font-semibold text-ink-950 dark:text-white">Telegram AI control</h2>
           <p className="mt-2 text-sm text-ink-500 dark:text-ink-400">
-            Natural-language intent parsing scaffold for Azerbaijani, Turkish, and English.
+            Conversational AI parser for Azerbaijani, Turkish, English, and mixed eBay automation requests.
           </p>
         </div>
         <StatusBadge status="Webhook route ready" tone="success" />
@@ -41,8 +44,20 @@ export default async function TelegramPage() {
           icon={<MessageSquareText size={18} />}
           tone={connection?.status === "active" ? "success" : "warning"}
         />
-        <DashboardCard title="Intent parser" value="Ready" detail="AI fallback plus deterministic parser." icon={<CheckCircle2 size={18} />} tone="success" />
+        <DashboardCard
+          title="Intent parser"
+          value={parserStatus.active ? "AI active" : "Fallback"}
+          detail={parserStatus.label}
+          icon={<CheckCircle2 size={18} />}
+          tone={parserStatus.active ? "success" : "warning"}
+        />
       </section>
+
+      {!parserStatus.active ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
+          AI parser key is not configured. Telegram still works with deterministic fallback, but natural mixed-language instructions are much stronger with `AI_PROVIDER=groq` and `GROQ_API_KEY`.
+        </div>
+      ) : null}
 
       <TelegramConnectionPanel
         connected={connection?.status === "active"}
@@ -73,6 +88,11 @@ export default async function TelegramPage() {
                 <div key={task.id} className="rounded-md bg-ink-50 p-3 text-sm dark:bg-white/[0.04]">
                   <p className="font-medium text-ink-900 dark:text-white">{task.task_type}</p>
                   <p className="mt-1 text-ink-500 dark:text-ink-400">{task.original_message}</p>
+                  {task.parsed_intent ? (
+                    <pre className="mt-3 max-h-40 overflow-auto rounded-md bg-white p-3 text-xs text-ink-700 dark:bg-ink-950 dark:text-ink-200">
+                      {JSON.stringify(task.parsed_intent, null, 2)}
+                    </pre>
+                  ) : null}
                 </div>
               ))
             ) : (
@@ -119,7 +139,7 @@ async function loadTelegramDashboardData() {
     supabase.from("telegram_connections").select("*").eq("user_id", user.id).maybeSingle(),
     supabase
       .from("agent_tasks")
-      .select("id,task_type,original_message,status,created_at")
+      .select("id,task_type,original_message,status,parsed_intent,created_at")
       .eq("user_id", user.id)
       .eq("source", "telegram")
       .order("created_at", { ascending: false })
@@ -144,6 +164,7 @@ async function loadTelegramDashboardData() {
       task_type: string;
       original_message: string | null;
       status: string;
+      parsed_intent: unknown;
     }>,
     logs: (logs.data ?? []) as Array<{
       id: string;

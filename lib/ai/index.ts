@@ -14,12 +14,28 @@ export function getConfiguredAiProvider(): AiProvider | null {
     return createAnthropicProvider(process.env.ANTHROPIC_API_KEY);
   }
 
+  if (provider === "openai" && process.env.OPENAI_API_KEY) {
+    return createOpenAiCompatibleProvider({
+      apiKey: process.env.OPENAI_API_KEY,
+      model: "gpt-4o-mini",
+      name: "openai"
+    });
+  }
+
+  if (process.env.GROQ_API_KEY) {
+    return createGroqProvider(process.env.GROQ_API_KEY);
+  }
+
   if (process.env.OPENAI_API_KEY) {
     return createOpenAiCompatibleProvider({
       apiKey: process.env.OPENAI_API_KEY,
       model: "gpt-4o-mini",
       name: "openai"
     });
+  }
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    return createAnthropicProvider(process.env.ANTHROPIC_API_KEY);
   }
 
   return null;

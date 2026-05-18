@@ -15,7 +15,7 @@ This implementation builds the foundation only:
 - Manual approval listing draft flow
 - Telegram, eBay, and cron skeletons
 
-Phase 2 adds eBay sandbox OAuth, encrypted token storage, token refresh, seller policy sync, inventory location setup, and sandbox publish flow for manually approved drafts. Phase 3 adds Telegram AI chatbot control with account-linked chat setup, natural-language intent parsing, agent task logging, and dashboard connection controls. Production eBay publishing remains disabled.
+Phase 2 adds eBay sandbox OAuth, encrypted token storage, token refresh, seller policy sync, inventory location setup, and sandbox publish flow for manually approved drafts. Phase 3 adds Telegram AI chatbot control with account-linked chat setup, conversational AI intent parsing, deterministic fallback parsing, agent task logging, and dashboard connection controls. Production eBay publishing remains disabled.
 
 ## Install
 
@@ -59,8 +59,10 @@ Required for Telegram:
 
 Required for AI providers:
 
-- `AI_PROVIDER=openai`, `groq`, or `anthropic`
-- `OPENAI_API_KEY`, `GROQ_API_KEY`, or `ANTHROPIC_API_KEY`
+- `AI_PROVIDER=groq`, `openai`, or `anthropic`
+- `GROQ_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`
+
+`AI_PROVIDER=groq` is the recommended local default for the Telegram conversational brain. If no AI key is configured, the Telegram bot keeps working with deterministic fallback parsing and writes a warning to `automation_logs`.
 
 ## Supabase Setup
 
@@ -219,6 +221,33 @@ Telegram sends the secret in the `X-Telegram-Bot-Api-Secret-Token` header; the w
 4. Send `/start CODE` to your Telegram bot.
 5. The webhook binds that chat ID to your Supabase user in `telegram_connections`.
 
+### Enable the AI Telegram Brain
+
+The Telegram webhook uses the AI provider abstraction in `lib/ai`. When a provider key exists, the bot asks the AI model to convert each natural message into strict JSON and validates it with Zod before execution. If the model returns invalid JSON or no key exists, the webhook falls back to deterministic parsing and logs a warning.
+
+Groq setup:
+
+```bash
+AI_PROVIDER=groq
+GROQ_API_KEY=your_groq_key
+```
+
+OpenAI setup:
+
+```bash
+AI_PROVIDER=openai
+OPENAI_API_KEY=your_openai_key
+```
+
+Anthropic setup:
+
+```bash
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your_anthropic_key
+```
+
+The `/dashboard/telegram` page shows `AI active` when Groq, OpenAI, or Anthropic is configured. It shows `Fallback` when no key is present, plus the latest parsed intent JSON for recent Telegram commands.
+
 ### Supported Natural-Language Intents
 
 - `SHOW_STATUS`
@@ -235,17 +264,26 @@ Telegram sends the secret in the `X-Telegram-Bot-Api-Secret-Token` header; the w
 - `UPDATE_BLOCKED_CATEGORY`
 - `UPDATE_BLOCKED_BRAND`
 - `CHANGE_APPROVAL_MODE`
+- `EXPLAIN_SYSTEM`
+- `ASK_CLARIFICATION`
 
 Example messages:
 
-- `Bugün 10 məhsul tap və analiz et`
-- `Minimum profit 20 faiz olsun`
-- `Automationu dayandır`
-- `Bugünkü reportu göstər`
-- `Riskli məhsulları list etmə`
-- `5 safe draftı sandbox eBay-də publish et`
+- `qaqa automationu aktiv et`
+- `botu işə sal`
+- `bugün 10 dənə yaxşı məhsul tap, riskli şeyləri list eləmə`
+- `minimum profit 20 faiz olsun`
+- `mənə bu gün nə etdiyini report ver`
+- `list olunmayan məhsullar niyə reject oldu?`
+- `safe olan 5 draftı sandbox ebaydə publish elə`
+- `electronics kateqoriyasını blokla`
+- `sabahdan gündəlik limit 15 olsun`
+- `indi sistemi dayandır, mən sonra davam etdirəcəm`
+- `hansı supplier daha yaxşıdır?`
+- `nə problem var sistemdə?`
+- `mənə insan kimi izah et`
 
-Every connected Telegram request is saved to `agent_tasks`. Bot responses and errors are saved to `automation_logs`. Sandbox draft publishing stays sandbox-only through the Phase 2 eBay service.
+Every connected Telegram request is saved to `agent_tasks` with the parsed intent JSON. Bot responses, parser fallback warnings, and errors are saved to `automation_logs`. Sandbox draft publishing stays sandbox-only through the Phase 2 eBay service; requests for production/live eBay publishing are refused with a safety explanation.
 
 ## Automation Modes
 

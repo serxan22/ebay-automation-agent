@@ -22,7 +22,8 @@ export function AuthForm({ configured }: { configured: boolean }) {
     event.preventDefault();
     setMessage("");
 
-    const validation = validate(email, password, mode);
+    const trimmedEmail = email.trim();
+    const validation = validate(trimmedEmail, password, mode);
     if (validation) {
       setMessageTone("error");
       setMessage(validation);
@@ -42,7 +43,7 @@ export function AuthForm({ configured }: { configured: boolean }) {
 
       if (mode === "login") {
         const { error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
+          email: trimmedEmail,
           password
         });
 
@@ -58,11 +59,12 @@ export function AuthForm({ configured }: { configured: boolean }) {
         return;
       }
 
+      const emailRedirectTo = getEmailRedirectTo();
       const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
+        email: trimmedEmail,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`
+          emailRedirectTo
         }
       });
 
@@ -171,11 +173,11 @@ export function AuthForm({ configured }: { configured: boolean }) {
 }
 
 function validate(email: string, password: string, mode: Mode) {
-  if (!email.trim()) {
+  if (!email) {
     return "Email is required.";
   }
 
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return "Enter a valid email address.";
   }
 
@@ -190,6 +192,17 @@ function validate(email: string, password: string, mode: Mode) {
   return "";
 }
 
+function getEmailRedirectTo() {
+  const origin = window.location.origin;
+  const redirectUrl = new URL("/auth/callback", origin);
+
+  if (!redirectUrl.protocol.startsWith("http")) {
+    throw new Error("Signup redirect URL must be an absolute HTTP or HTTPS URL.");
+  }
+
+  return redirectUrl.toString();
+}
+
 function mapAuthError(message: string, mode: Mode) {
   const normalized = message.toLowerCase();
 
@@ -199,6 +212,11 @@ function mapAuthError(message: string, mode: Mode) {
 
   if (normalized.includes("email not confirmed") || normalized.includes("not confirmed")) {
     return "Your email is not confirmed yet. Open the confirmation email from Supabase, then sign in.";
+  }
+
+  if (normalized.includes("invalid path specified") || normalized.includes("invalid redirect")) {
+    return "The signup redirect URL is not allowed by Supabase. Add this URL in Supabase Auth Redirect URLs: " +
+      `${window.location.origin}/auth/callback`;
   }
 
   if (normalized.includes("already registered") || normalized.includes("already exists") || normalized.includes("user already")) {

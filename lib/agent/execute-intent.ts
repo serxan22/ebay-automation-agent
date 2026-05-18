@@ -9,11 +9,23 @@ export async function executeTelegramIntent({
   userId: string;
   intent: TelegramIntent;
 }): Promise<AgentTaskResult> {
-  if (intent.requiresConfirmation) {
+  if (intent.intent === "ASK_CLARIFICATION" || intent.intent === "UNKNOWN") {
     return {
       ok: false,
-      message: intent.clarificationQuestion ?? "Confirmation is required before this action can run.",
-      warnings: intent.safetyNotes
+      message:
+        intent.safe_response ||
+        intent.clarifying_question ||
+        "I need a little more detail before I can safely run that."
+    };
+  }
+
+  if (intent.needs_confirmation || !intent.should_execute) {
+    return {
+      ok: false,
+      message:
+        intent.clarifying_question ??
+        intent.safe_response ??
+        "Confirmation is required before this action can run."
     };
   }
 
@@ -36,6 +48,11 @@ export async function executeTelegramIntent({
         ok: true,
         message: `${intent.intent} parsed successfully. Persisting settings updates is wired to the Phase 3 Telegram control flow.`
       };
+    case "EXPLAIN_SYSTEM":
+      return {
+        ok: true,
+        message: "The Telegram webhook flow can explain live account status, suppliers, and recent automation logs."
+      };
     case "FIND_PRODUCTS":
     case "ANALYZE_PRODUCTS":
     case "CREATE_LISTING_DRAFTS":
@@ -50,7 +67,10 @@ export async function executeTelegramIntent({
     default:
       return {
         ok: false,
-        message: intent.clarificationQuestion ?? "I could not understand the requested action."
+        message:
+          intent.safe_response ||
+          intent.clarifying_question ||
+          "I could not understand the requested action."
       };
   }
 }

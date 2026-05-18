@@ -11,8 +11,13 @@ import {
   executeTelegramIntentAction,
   finishTelegramAgentTask
 } from "@/lib/telegram/actions";
-import { parseTelegramIntent } from "@/lib/telegram/intent-parser";
-import { buildIntentAcknowledgement, buildTaskResultReply } from "@/lib/telegram/replies";
+import {
+  createTelegramIntent,
+  getTelegramAiParserStatus,
+  parseTelegramIntent,
+  type TelegramIntent
+} from "@/lib/telegram/intent-parser";
+import { buildTelegramReply } from "@/lib/telegram/replies";
 import { sendTelegramMessage } from "@/lib/telegram/bot";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -45,6 +50,8 @@ export async function POST(request: Request) {
   let currentUserId: string | null = null;
   let currentTaskId: string | null = null;
   let currentChatId: string | null = null;
+  let currentIntent: TelegramIntent | null = null;
+  let currentMessage: string | null = null;
 
   if (expectedSecret && receivedSecret !== expectedSecret) {
     return NextResponse.json({ error: "Invalid Telegram webhook secret." }, { status: 401 });
@@ -61,6 +68,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, ignored: true });
     }
 
+    currentMessage = text;
     const chatIdString = String(chatId);
     currentChatId = chatIdString;
     const connectionCode = extractStartCode(text);
@@ -80,7 +88,12 @@ export async function POST(request: Request) {
         : "That connection code is invalid or expired. Generate a new code from the dashboard Telegram page.";
 
       if (connected) {
-        const intent = await parseTelegramIntent({ message: "connect telegram" });
+        const intent = createTelegramIntent("SHOW_STATUS", {
+          language: detectedLanguage,
+          confidence: 1,
+          should_execute: false,
+          safe_response: "Telegram chat connected."
+        });
         const taskId = await createTelegramAgentTask({
           supabase,
           userId: connected.userId,
@@ -118,7 +131,9 @@ export async function POST(request: Request) {
     }
 
     const settings = await loadUserSettingsForParser(supabase, connection.user_id);
+    const parserStatus = getTelegramAiParserStatus();
     const intent = await parseTelegramIntent({ message: text, settings });
+    currentIntent = intent;
     currentUserId = connection.user_id;
     const taskId = await createTelegramAgentTask({
       supabase,
@@ -127,18 +142,24 @@ export async function POST(request: Request) {
       intent
     });
     currentTaskId = taskId;
-    const acknowledgement = buildIntentAcknowledgement(intent);
     const result = await executeTelegramIntentAction({
       supabase,
       userId: connection.user_id,
       intent
     });
-    const reply = `${acknowledgement}\n\n${buildTaskResultReply(result, intent.language)}`;
+    const reply = buildTelegramReply(intent, result);
 
     await finishTelegramAgentTask({
       supabase,
       taskId,
-      result
+      result: {
+        ...result,
+        metrics: {
+          ...(result.metrics ?? {}),
+          intentConfidence: intent.confidence,
+          aiParserActive: parserStatus.active
+        }
+      }
     });
 
     await touchTelegramConnection({
@@ -157,10 +178,33 @@ export async function POST(request: Request) {
         chatId: chatIdString,
         originalMessage: text,
         intent: intent.intent,
+        parsedIntentJson: intent,
+        parser: intent.parser,
+        parserWarning: intent.parser_warning,
+        aiParserStatus: parserStatus,
         parameters: intent.parameters,
-        taskId
+        taskId,
+        reply,
+        result
       }
     });
+
+    if (intent.parser_warning || !parserStatus.active) {
+      await logAutomationEvent({
+        supabase,
+        userId: connection.user_id,
+        level: "warning",
+        module: "telegram",
+        message: intent.parser_warning ?? parserStatus.warning ?? "Telegram AI parser fallback was used.",
+        metadata: {
+          chatId: chatIdString,
+          originalMessage: text,
+          parser: intent.parser,
+          aiParserStatus: parserStatus,
+          parsedIntentJson: intent
+        }
+      });
+    }
 
     if (process.env.TELEGRAM_BOT_TOKEN) {
       await sendTelegramMessage({ chatId: chatIdString, text: reply });
@@ -185,7 +229,13 @@ export async function POST(request: Request) {
         level: "error",
         module: "telegram",
         message,
-        metadata: { chatId: currentChatId }
+        metadata: {
+          chatId: currentChatId,
+          taskId: currentTaskId,
+          originalMessage: currentMessage,
+          intent: currentIntent?.intent,
+          parsedIntentJson: currentIntent
+        }
       }).catch(() => undefined);
     }
 
@@ -220,7 +270,9 @@ function detectTelegramLanguage(text: string, telegramLanguage?: string | null) 
 async function loadUserSettingsForParser(supabase: ReturnType<typeof createSupabaseServiceClient>, userId: string) {
   const { data } = await supabase
     .from("automation_settings")
-    .select("approval_mode,new_account_safe_mode")
+    .select(
+      "daily_listing_limit,min_profit_amount,min_margin_percentage,max_shipping_days,min_stock_quantity,auto_listing_enabled,approval_mode,risk_tolerance,allowed_categories,blocked_categories,blocked_brands,supplier_priority,new_account_safe_mode"
+    )
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -229,7 +281,18 @@ async function loadUserSettingsForParser(supabase: ReturnType<typeof createSupab
   }
 
   return {
+    dailyListingLimit: Number(data.daily_listing_limit ?? 5),
+    minProfitAmount: Number(data.min_profit_amount ?? 5),
+    minMarginPercentage: Number(data.min_margin_percentage ?? 25),
+    maxShippingDays: Number(data.max_shipping_days ?? 5),
+    minStockQuantity: Number(data.min_stock_quantity ?? 5),
+    autoListingEnabled: Boolean(data.auto_listing_enabled),
     approvalMode: data.approval_mode,
+    riskTolerance: Number(data.risk_tolerance ?? 80),
+    allowedCategories: data.allowed_categories ?? [],
+    blockedCategories: data.blocked_categories ?? [],
+    blockedBrands: data.blocked_brands ?? [],
+    supplierPriority: data.supplier_priority ?? [],
     newAccountSafeMode: data.new_account_safe_mode
   };
 }
