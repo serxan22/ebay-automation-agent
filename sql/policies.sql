@@ -11,6 +11,7 @@ alter table public.agent_tasks enable row level security;
 alter table public.automation_logs enable row level security;
 alter table public.reports enable row level security;
 alter table public.telegram_connections enable row level security;
+alter table public.telegram_connection_tokens enable row level security;
 
 create policy "users_profile_select_own"
 on public.users_profile for select
@@ -90,5 +91,10 @@ with check (auth.uid() = user_id);
 
 create policy "telegram_connections_all_own"
 on public.telegram_connections for all
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+create policy "telegram_connection_tokens_all_own"
+on public.telegram_connection_tokens for all
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);

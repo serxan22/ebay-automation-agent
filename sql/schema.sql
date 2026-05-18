@@ -263,9 +263,22 @@ create table if not exists public.telegram_connections (
   user_id uuid not null references auth.users(id) on delete cascade unique,
   telegram_chat_id text not null unique,
   telegram_username text,
+  preferred_language text not null default 'en',
+  last_message_at timestamptz,
   status text not null default 'active',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table if not exists public.telegram_connection_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  code_hash text not null unique,
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  telegram_chat_id text,
+  telegram_username text,
+  created_at timestamptz not null default now()
 );
 
 create index if not exists suppliers_user_idx on public.suppliers(user_id);
@@ -278,6 +291,7 @@ create index if not exists ebay_accounts_user_marketplace_idx on public.ebay_acc
 create index if not exists agent_tasks_user_status_idx on public.agent_tasks(user_id, status);
 create index if not exists automation_logs_user_created_idx on public.automation_logs(user_id, created_at desc);
 create index if not exists reports_user_created_idx on public.reports(user_id, created_at desc);
+create index if not exists telegram_connection_tokens_user_idx on public.telegram_connection_tokens(user_id, expires_at desc);
 
 create trigger users_profile_updated_at
 before update on public.users_profile

@@ -15,7 +15,7 @@ This implementation builds the foundation only:
 - Manual approval listing draft flow
 - Telegram, eBay, and cron skeletons
 
-Phase 2 now adds eBay sandbox OAuth, encrypted token storage, token refresh, seller policy sync, inventory location setup, and sandbox publish flow for manually approved drafts. Production eBay publishing remains disabled.
+Phase 2 adds eBay sandbox OAuth, encrypted token storage, token refresh, seller policy sync, inventory location setup, and sandbox publish flow for manually approved drafts. Phase 3 adds Telegram AI chatbot control with account-linked chat setup, natural-language intent parsing, agent task logging, and dashboard connection controls. Production eBay publishing remains disabled.
 
 ## Install
 
@@ -145,13 +145,77 @@ Production is intentionally blocked in Phase 2. Keep `EBAY_ENVIRONMENT=sandbox`;
 
 ## Telegram Bot
 
-The Telegram webhook skeleton is:
+The Telegram webhook is:
 
 ```text
 /api/telegram/webhook
 ```
 
-Set the webhook with Telegram using your deployed app URL and `TELEGRAM_WEBHOOK_SECRET`. The intent parser already recognizes English, Azerbaijani, and Turkish messages, but persistent settings updates and live task execution are Phase 3 work.
+### Create a Telegram Bot
+
+1. Open Telegram and message `@BotFather`.
+2. Send `/newbot`.
+3. Choose a bot name and username.
+4. Copy the bot token BotFather gives you.
+5. Add it to `.env.local`:
+
+```bash
+TELEGRAM_BOT_TOKEN=123456:your_token
+TELEGRAM_WEBHOOK_SECRET=choose-a-long-random-secret
+APP_URL=https://your-public-url.example.com
+```
+
+For local testing, use a public HTTPS tunnel such as ngrok or Cloudflare Tunnel and set `APP_URL` to that tunnel URL.
+
+### Set the Webhook
+
+From the dashboard, open `/dashboard/telegram` and click `Set webhook`.
+
+Or set it manually:
+
+```bash
+curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://YOUR_PUBLIC_URL/api/telegram/webhook","secret_token":"YOUR_TELEGRAM_WEBHOOK_SECRET","allowed_updates":["message"]}'
+```
+
+Telegram sends the secret in the `X-Telegram-Bot-Api-Secret-Token` header; the webhook rejects mismatches.
+
+### Connect a Chat
+
+1. Sign in to the dashboard.
+2. Open `/dashboard/telegram`.
+3. Click `Generate link code`.
+4. Send `/start CODE` to your Telegram bot.
+5. The webhook binds that chat ID to your Supabase user in `telegram_connections`.
+
+### Supported Natural-Language Intents
+
+- `SHOW_STATUS`
+- `SHOW_DAILY_REPORT`
+- `PAUSE_AUTOMATION`
+- `RESUME_AUTOMATION`
+- `CHANGE_DAILY_LIMIT`
+- `CHANGE_MIN_MARGIN`
+- `FIND_PRODUCTS`
+- `ANALYZE_PRODUCTS`
+- `CREATE_LISTING_DRAFTS`
+- `PUBLISH_SAFE_DRAFTS_SANDBOX`
+- `SHOW_FAILED_TASKS`
+- `UPDATE_BLOCKED_CATEGORY`
+- `UPDATE_BLOCKED_BRAND`
+- `CHANGE_APPROVAL_MODE`
+
+Example messages:
+
+- `Bugün 10 məhsul tap və analiz et`
+- `Minimum profit 20 faiz olsun`
+- `Automationu dayandır`
+- `Bugünkü reportu göstər`
+- `Riskli məhsulları list etmə`
+- `5 safe draftı sandbox eBay-də publish et`
+
+Every connected Telegram request is saved to `agent_tasks`. Bot responses and errors are saved to `automation_logs`. Sandbox draft publishing stays sandbox-only through the Phase 2 eBay service.
 
 ## Automation Modes
 

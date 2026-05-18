@@ -5,19 +5,16 @@ import type { AutomationSettings } from "@/lib/types";
 
 export const TelegramIntentSchema = z.object({
   intent: z.enum([
-    "START_AUTOMATION",
+    "SHOW_STATUS",
+    "SHOW_DAILY_REPORT",
     "PAUSE_AUTOMATION",
     "RESUME_AUTOMATION",
     "CHANGE_DAILY_LIMIT",
-    "CHANGE_PROFIT_RULE",
+    "CHANGE_MIN_MARGIN",
     "FIND_PRODUCTS",
     "ANALYZE_PRODUCTS",
-    "LIST_PRODUCTS",
-    "FIND_AND_LIST_PRODUCTS",
-    "APPROVE_DRAFTS",
-    "REJECT_DRAFTS",
-    "SHOW_STATUS",
-    "SHOW_REPORT",
+    "CREATE_LISTING_DRAFTS",
+    "PUBLISH_SAFE_DRAFTS_SANDBOX",
     "SHOW_FAILED_TASKS",
     "UPDATE_BLOCKED_CATEGORY",
     "UPDATE_BLOCKED_BRAND",
@@ -89,6 +86,10 @@ export function parseTelegramIntentHeuristically(
     parameters.min_margin_percentage = margin;
   }
 
+  if (/safe|təhlükəsiz|guvenli|güvenli/.test(text)) {
+    parameters.safe_only = true;
+  }
+
   if (/\bus\b|amerika|united states/.test(text)) {
     parameters.shipping_country = "US";
   }
@@ -97,10 +98,25 @@ export function parseTelegramIntentHeuristically(
     parameters.category = "home kitchen";
   }
 
+  if (/riskli|risky/.test(text) && /list etmə|etme|do not|don't|publish etmə|yayınlama/.test(text)) {
+    return makeIntent("CHANGE_APPROVAL_MODE", language, {
+      parameters: { approval_mode: "manual", safe_only: true },
+      confidence: 0.76
+    });
+  }
+
   if (/electron|elektron/.test(text) && /do not|don't|list etmə|etme|yazma|blok|block/.test(text)) {
     return makeIntent("UPDATE_BLOCKED_CATEGORY", language, {
       parameters: { category: "electronics", action: "block" },
       confidence: 0.82
+    });
+  }
+
+  const blockedBrand = extractBlockedBrand(message);
+  if (blockedBrand) {
+    return makeIntent("UPDATE_BLOCKED_BRAND", language, {
+      parameters: { brand: blockedBrand, action: "block" },
+      confidence: 0.76
     });
   }
 
@@ -120,6 +136,13 @@ export function parseTelegramIntentHeuristically(
     });
   }
 
+  if (/(minimum|min).*(margin|profit|marja|faiz)|(\d{1,3})\s*(%|faiz|percent).*(olsun|minimum|min|margin|profit)/.test(text) && margin) {
+    return makeIntent("CHANGE_MIN_MARGIN", language, {
+      parameters: { min_margin_percentage: margin },
+      confidence: 0.86
+    });
+  }
+
   if (/full auto|tam auto|tam avto/.test(text)) {
     safetyNotes.push("Full auto mode can publish without per-item approval and should only be used after sandbox validation.");
     return makeIntent("CHANGE_APPROVAL_MODE", language, {
@@ -131,37 +154,45 @@ export function parseTelegramIntentHeuristically(
   }
 
   if (/report|hesabat|rapor|status|vəziyyət|durum/.test(text)) {
-    return makeIntent(/failed|fail|xəta|hata/.test(text) ? "SHOW_FAILED_TASKS" : "SHOW_REPORT", language, {
+    if (/failed|fail|xəta|hata/.test(text)) {
+      return makeIntent("SHOW_FAILED_TASKS", language, {
+        confidence: 0.82
+      });
+    }
+
+    if (/status|vəziyyət|durum/.test(text)) {
+      return makeIntent("SHOW_STATUS", language, {
+        confidence: 0.82
+      });
+    }
+
+    return makeIntent("SHOW_DAILY_REPORT", language, {
       confidence: 0.82
     });
   }
 
-  if (/approve|təsdiq|onay/.test(text)) {
-    return makeIntent("APPROVE_DRAFTS", language, { parameters, confidence: 0.75, requiresConfirmation: true });
+  if (/(sandbox|test)/.test(text) && /(publish|list|yerləşdir|yerlestir|yayınla)/.test(text)) {
+    return makeIntent("PUBLISH_SAFE_DRAFTS_SANDBOX", language, {
+      parameters,
+      confidence: 0.82,
+      requiresConfirmation: false
+    });
+  }
+
+  if (/(draft|listing draft|qaralama|taslak)/.test(text) && /(create|yarat|oluştur|hazırla)/.test(text)) {
+    return makeIntent("CREATE_LISTING_DRAFTS", language, { parameters, confidence: 0.8 });
   }
 
   if (/analy[sz]e|analiz/.test(text)) {
     return makeIntent("ANALYZE_PRODUCTS", language, { parameters, confidence: 0.78 });
   }
 
-  if (/find|tap|bul/.test(text) && /(list|yerləşdir|yerlestir|yayınla|publish)/.test(text)) {
-    return makeIntent("FIND_AND_LIST_PRODUCTS", language, {
-      parameters,
-      confidence: 0.86,
-      requiresConfirmation: settings?.approvalMode !== "full_auto"
-    });
-  }
-
   if (/find|tap|bul/.test(text)) {
     return makeIntent("FIND_PRODUCTS", language, { parameters, confidence: 0.78 });
   }
 
-  if (/list|yerləşdir|yerlestir|publish/.test(text)) {
-    return makeIntent("LIST_PRODUCTS", language, {
-      parameters,
-      confidence: 0.78,
-      requiresConfirmation: settings?.approvalMode !== "full_auto"
-    });
+  if (/(draft|listing)/.test(text)) {
+    return makeIntent("CREATE_LISTING_DRAFTS", language, { parameters, confidence: 0.72 });
   }
 
   return makeIntent("UNKNOWN", language, {
@@ -210,4 +241,15 @@ function detectLanguage(text: string): TelegramIntent["language"] {
   }
 
   return "unknown";
+}
+
+function extractBlockedBrand(message: string) {
+  const match = message.match(/(?:do not|don't|block|blok|list etmə|listeleme)\s+(?:list\s+)?([A-Z][A-Za-z0-9&.\-\s]{1,40})(?:\s+(?:anymore|artıq|artik|products|məhsul|urun|ürün))?/);
+  const brand = match?.[1]?.trim();
+
+  if (!brand || /electronics|elektron|category|products|məhsul|urun|ürün/i.test(brand)) {
+    return undefined;
+  }
+
+  return brand;
 }

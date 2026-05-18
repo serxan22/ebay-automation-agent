@@ -19,16 +19,16 @@ export async function executeTelegramIntent({
 
   switch (intent.intent) {
     case "SHOW_STATUS":
-    case "SHOW_REPORT":
+    case "SHOW_DAILY_REPORT":
     case "SHOW_FAILED_TASKS":
       return {
         ok: true,
-        message: "Dashboard reporting is available. Live Telegram report execution will be connected in Phase 3."
+        message: "Dashboard reporting is available. Use the Telegram webhook flow for live account-scoped execution."
       };
     case "PAUSE_AUTOMATION":
     case "RESUME_AUTOMATION":
     case "CHANGE_DAILY_LIMIT":
-    case "CHANGE_PROFIT_RULE":
+    case "CHANGE_MIN_MARGIN":
     case "UPDATE_BLOCKED_CATEGORY":
     case "UPDATE_BLOCKED_BRAND":
     case "CHANGE_APPROVAL_MODE":
@@ -38,8 +38,8 @@ export async function executeTelegramIntent({
       };
     case "FIND_PRODUCTS":
     case "ANALYZE_PRODUCTS":
-    case "LIST_PRODUCTS":
-    case "FIND_AND_LIST_PRODUCTS": {
+    case "CREATE_LISTING_DRAFTS":
+    case "PUBLISH_SAFE_DRAFTS_SANDBOX": {
       const task = createAgentTask({
         userId,
         taskType: "telegram_requested_task",
