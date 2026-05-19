@@ -1,10 +1,22 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { publishListingDraftToEbaySandbox } from "@/lib/ebay/publish";
+import { getConfiguredAiProvider } from "@/lib/ai";
 import { generateListing } from "@/lib/ai/generate-listing";
 import { analyzeProduct } from "@/lib/products/analyze-product";
+import {
+  createListingDraft,
+  createSafeFallbackListingGeneration
+} from "@/lib/products/create-listing-draft";
 import type { TelegramIntent } from "@/lib/telegram/intent-parser";
-import type { AgentTaskResult, AutomationSettings, Supplier, SupplierProduct } from "@/lib/types";
+import type {
+  AgentTaskResult,
+  AutomationSettings,
+  ListingGenerationResult,
+  ProductAnalysis,
+  Supplier,
+  SupplierProduct
+} from "@/lib/types";
 
 export async function createTelegramAgentTask({
   supabase,
@@ -114,7 +126,12 @@ export async function executeTelegramIntentAction({
     case "ANALYZE_PRODUCTS":
       return analyzeProducts({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 10 });
     case "CREATE_LISTING_DRAFTS":
-      return createListingDrafts({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 5 });
+      return createListingDrafts({
+        supabase,
+        userId,
+        quantity: getNumber(intent.parameters.quantity) ?? 5,
+        source: intent.parameters.draft_source ?? "latest_products"
+      });
     case "PUBLISH_SAFE_DRAFTS_SANDBOX":
       return publishSafeDraftsSandbox({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 5 });
     case "SHOW_FAILED_TASKS":
@@ -395,23 +412,125 @@ async function analyzeProducts({ supabase, userId, quantity }: ActionContext & {
   };
 }
 
-async function createListingDrafts({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
+async function createListingDrafts({
+  supabase,
+  userId,
+  quantity,
+  source
+}: ActionContext & {
+  quantity: number;
+  source: "latest_products" | "approved_products";
+}) {
   const settings = await getAutomationSettings(supabase, userId);
-  const { products, suppliers } = await loadProductsForAction({ supabase, userId, limit: quantity });
-
-  if (!products.length) {
-    return { ok: true, message: "No supplier products available for draft creation." };
-  }
-
+  const startedAt = new Date().toISOString();
   let draftsCreated = 0;
   let rejected = 0;
   let approved = 0;
   const rejectionCounts = new Map<string, number>();
+  const failures: string[] = [];
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "listing_drafts",
+    message: "draft_creation_started",
+    metadata: { quantity, source, startedAt }
+  });
+
+  const candidates =
+    source === "approved_products"
+      ? await loadApprovedAnalysisCandidates({ supabase, userId, limit: quantity })
+      : await analyzeLatestProductsForDrafts({ supabase, userId, settings, limit: quantity });
+
+  if (!candidates.length) {
+    return {
+      ok: true,
+      message:
+        source === "approved_products"
+          ? "No approved product analysis rows found. Analyze products first."
+          : "No supplier products available for draft creation."
+    };
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate.analysis.approvedForListing) {
+      rejected += 1;
+      for (const reason of candidate.analysis.rejectionReasons) {
+        const groupedReason = groupRejectionReason(reason);
+        rejectionCounts.set(groupedReason, (rejectionCounts.get(groupedReason) ?? 0) + 1);
+      }
+      continue;
+    }
+
+    approved += 1;
+    const created = await createDraftFromCandidate({
+      supabase,
+      userId,
+      settings,
+      candidate
+    });
+
+    if (created.ok) {
+      draftsCreated += 1;
+    } else {
+      failures.push(created.reason);
+    }
+  }
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "success",
+    module: "listing_drafts",
+    message: "Telegram listing drafts created.",
+    metadata: {
+      productsAnalyzed: candidates.length,
+      approved,
+      rejected,
+      draftsCreated,
+      failures
+    }
+  });
+
+  const reasons = formatGroupedRejectionReasons(rejectionCounts);
+  const failureSummary = failures.length ? `\nDraft creation failed:\n${failures.map((failure) => `- ${failure}`).join("\n")}` : "";
+
+  return {
+    ok: failures.length === 0 || draftsCreated > 0,
+    message: `${candidates.length} products analyzed: ${approved} approved, ${rejected} rejected. ${draftsCreated} listing drafts created.${
+      reasons ? `\nReasons:\n${reasons}` : ""
+    }${failureSummary}`
+  };
+}
+
+async function analyzeLatestProductsForDrafts({
+  supabase,
+  userId,
+  settings,
+  limit
+}: ActionContext & {
+  settings: AutomationSettings;
+  limit: number;
+}): Promise<DraftCandidate[]> {
+  const { products, suppliers } = await loadProductsForAction({ supabase, userId, limit });
+  const candidates: DraftCandidate[] = [];
 
   for (const product of products) {
     const supplier = suppliers.find((item) => item.id === product.supplierId) ?? null;
     const analysis = analyzeProduct({ product, settings, supplier });
-    const { data: analysisRow, error: analysisError } = await supabase
+
+    if (!product.id) {
+      candidates.push({
+        product,
+        analysis,
+        analysisId: null,
+        failureReason: "missing supplier_product_id"
+      });
+      continue;
+    }
+
+    const { data, error } = await supabase
       .from("product_analysis")
       .insert({
         user_id: userId,
@@ -435,66 +554,235 @@ async function createListingDrafts({ supabase, userId, quantity }: ActionContext
       .select("id")
       .single();
 
-    if (analysisError) {
-      throw new Error(analysisError.message);
-    }
-
-    if (!analysis.approvedForListing) {
-      rejected += 1;
-      for (const reason of analysis.rejectionReasons) {
-        const groupedReason = groupRejectionReason(reason);
-        rejectionCounts.set(groupedReason, (rejectionCounts.get(groupedReason) ?? 0) + 1);
-      }
-      continue;
-    }
-
-    approved += 1;
-    const generated = await generateListing({ product, analysis });
-    const { error } = await supabase.from("listing_drafts").insert({
-      user_id: userId,
-      supplier_product_id: product.id,
-      analysis_id: analysisRow.id,
-      ebay_title: generated.ebayTitle,
-      ebay_description: generated.ebayDescription,
-      ebay_category_id: null,
-      item_specifics: generated.itemSpecifics,
-      condition: "NEW",
-      quantity: Math.min(settings.defaultQuantity, Math.max(product.stockQuantity, 1)),
-      price: analysis.recommendedEbayPrice,
-      optimized_image_urls: product.imageUrls,
-      status: "draft",
-      ai_generated: true
+    candidates.push({
+      product,
+      analysis,
+      analysisId: data?.id ?? null,
+      failureReason: error ? describeSupabaseError(error) : data?.id ? undefined : "missing analysis_id"
     });
-
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    draftsCreated += 1;
   }
 
+  return candidates;
+}
+
+async function loadApprovedAnalysisCandidates({
+  supabase,
+  userId,
+  limit
+}: ActionContext & {
+  limit: number;
+}): Promise<DraftCandidate[]> {
+  const { data: analysisRows, error } = await supabase
+    .from("product_analysis")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("approved_for_listing", true)
+    .order("created_at", { ascending: false })
+    .limit(limit * 4);
+
+  if (error) {
+    throw new Error(describeSupabaseError(error));
+  }
+
+  if (!analysisRows?.length) {
+    return [];
+  }
+
+  const analysisIds = analysisRows.map((row) => row.id as string);
+  const { data: existingDrafts, error: draftError } = await supabase
+    .from("listing_drafts")
+    .select("analysis_id")
+    .eq("user_id", userId)
+    .in("analysis_id", analysisIds);
+
+  if (draftError) {
+    throw new Error(describeSupabaseError(draftError));
+  }
+
+  const existingAnalysisIds = new Set((existingDrafts ?? []).map((row) => row.analysis_id).filter(Boolean));
+  const availableRows = analysisRows.filter((row) => !existingAnalysisIds.has(row.id)).slice(0, limit);
+  const productIds = availableRows.map((row) => row.supplier_product_id as string).filter(Boolean);
+
+  if (!productIds.length) {
+    return [];
+  }
+
+  const { data: productRows, error: productError } = await supabase
+    .from("supplier_products")
+    .select("*")
+    .eq("user_id", userId)
+    .in("id", productIds);
+
+  if (productError) {
+    throw new Error(describeSupabaseError(productError));
+  }
+
+  const productsById = new Map(
+    ((productRows ?? []) as Array<Record<string, any>>).map((row) => [row.id as string, mapSupplierProduct(row)])
+  );
+
+  return availableRows
+    .map<DraftCandidate | null>((row) => {
+      const product = productsById.get(row.supplier_product_id as string);
+
+      if (!product) {
+        return null;
+      }
+
+      return {
+        product,
+        analysis: mapProductAnalysis(row as Record<string, any>),
+        analysisId: row.id as string
+      };
+    })
+    .filter((candidate): candidate is DraftCandidate => candidate !== null);
+}
+
+async function createDraftFromCandidate({
+  supabase,
+  userId,
+  settings,
+  candidate
+}: ActionContext & {
+  settings: AutomationSettings;
+  candidate: DraftCandidate;
+}): Promise<{ ok: true; draftId: string } | { ok: false; reason: string }> {
+  const reason = validateDraftCandidate(candidate);
+
+  if (reason) {
+    await logDraftCreationFailed({ supabase, userId, candidate, reason });
+    return { ok: false, reason };
+  }
+
+  try {
+    const generated = await generateListingForDraft(candidate.product, candidate.analysis);
+    const ebayCategoryId = /^\d+$/.test(generated.categorySuggestion) ? generated.categorySuggestion : null;
+    const draft = createListingDraft({
+      product: candidate.product,
+      analysis: candidate.analysis,
+      generatedListing: {
+        ...generated,
+        itemSpecifics: generated.itemSpecifics ?? {}
+      },
+      settings,
+      optimizedImageUrls: candidate.product.imageUrls,
+      analysisId: candidate.analysisId
+    });
+    const fallbackUsed = generated.warnings.includes("Safe fallback listing content was used.");
+    const { data, error } = await supabase
+      .from("listing_drafts")
+      .insert({
+        user_id: userId,
+        supplier_product_id: draft.supplierProductId,
+        analysis_id: draft.analysisId,
+        ebay_title: draft.ebayTitle,
+        ebay_description: draft.ebayDescription,
+        ebay_category_id: ebayCategoryId ?? draft.ebayCategoryId,
+        item_specifics: draft.itemSpecifics,
+        condition: draft.condition,
+        quantity: fallbackUsed ? Math.max(1, Math.min(candidate.product.stockQuantity || 1, 1)) : draft.quantity,
+        price: draft.price,
+        optimized_image_urls: draft.optimizedImageUrls,
+        status: "draft",
+        ai_generated: draft.aiGenerated
+      })
+      .select("id")
+      .single();
+
+    if (error) {
+      const insertReason = describeSupabaseError(error);
+      await logDraftCreationFailed({ supabase, userId, candidate, reason: insertReason });
+      return { ok: false, reason: insertReason };
+    }
+
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "success",
+      module: "listing_drafts",
+      message: "draft_created",
+      metadata: {
+        draftId: data.id,
+        supplierProductId: candidate.product.id,
+        analysisId: candidate.analysisId,
+        price: draft.price
+      }
+    });
+
+    return { ok: true, draftId: data.id as string };
+  } catch (error) {
+    const failureReason = error instanceof Error ? error.message : "draft_creation_failed";
+    await logDraftCreationFailed({ supabase, userId, candidate, reason: failureReason });
+    return { ok: false, reason: failureReason };
+  }
+}
+
+function validateDraftCandidate(candidate: DraftCandidate) {
+  if (candidate.failureReason) {
+    return candidate.failureReason;
+  }
+
+  if (!candidate.product.id) {
+    return "missing supplier_product_id";
+  }
+
+  if (!candidate.analysisId) {
+    return "missing analysis_id";
+  }
+
+  if (!Number.isFinite(candidate.analysis.recommendedEbayPrice) || candidate.analysis.recommendedEbayPrice <= 0) {
+    return "missing price";
+  }
+
+  if (!candidate.product.title?.trim()) {
+    return "validation error: missing product title";
+  }
+
+  return null;
+}
+
+async function generateListingForDraft(product: SupplierProduct, analysis: ProductAnalysis): Promise<ListingGenerationResult> {
+  const provider = getConfiguredAiProvider();
+
+  if (!provider) {
+    return createSafeFallbackListingGeneration(product, analysis);
+  }
+
+  try {
+    const generated = await generateListing({ product, analysis });
+
+    if (generated.warnings.some((warning) => /AI provider fallback used/i.test(warning))) {
+      return createSafeFallbackListingGeneration(product, analysis);
+    }
+
+    return generated;
+  } catch {
+    return createSafeFallbackListingGeneration(product, analysis);
+  }
+}
+
+async function logDraftCreationFailed({
+  supabase,
+  userId,
+  candidate,
+  reason
+}: ActionContext & {
+  candidate: DraftCandidate;
+  reason: string;
+}) {
   await logAutomationEvent({
     supabase,
     userId,
-    level: "success",
+    level: "error",
     module: "listing_drafts",
-    message: "Telegram listing drafts created.",
+    message: "draft_creation_failed",
     metadata: {
-      productsAnalyzed: products.length,
-      approved,
-      rejected,
-      draftsCreated
+      reason,
+      supplierProductId: candidate.product.id,
+      supplierSku: candidate.product.supplierSku,
+      analysisId: candidate.analysisId
     }
   });
-
-  const reasons = formatGroupedRejectionReasons(rejectionCounts);
-
-  return {
-    ok: true,
-    message: `${products.length} products analyzed: ${approved} approved, ${rejected} rejected. ${draftsCreated} listing drafts created.${
-      reasons ? `\nReasons:\n${reasons}` : ""
-    }`
-  };
 }
 
 async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
@@ -831,6 +1119,26 @@ function mapSupplier(row: Record<string, any>): Supplier {
   };
 }
 
+function mapProductAnalysis(row: Record<string, any>): ProductAnalysis {
+  return {
+    profitScore: Number(row.profit_score ?? 0),
+    riskScore: Number(row.risk_score ?? 0),
+    demandScore: Number(row.demand_score ?? 0),
+    competitionScore: Number(row.competition_score ?? 0),
+    imageScore: Number(row.image_score ?? 0),
+    shippingScore: Number(row.shipping_score ?? 0),
+    finalScore: Number(row.final_score ?? 0),
+    estimatedEbayFees: Number(row.estimated_ebay_fees ?? 0),
+    estimatedTotalCost: Number(row.estimated_total_cost ?? 0),
+    recommendedEbayPrice: Number(row.recommended_ebay_price ?? 0),
+    estimatedProfit: Number(row.estimated_profit ?? 0),
+    marginPercentage: Number(row.margin_percentage ?? 0),
+    aiNotes: row.ai_notes ?? "",
+    rejectionReasons: Array.isArray(row.rejection_reasons) ? row.rejection_reasons : [],
+    approvedForListing: Boolean(row.approved_for_listing)
+  };
+}
+
 function getNumber(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
@@ -892,6 +1200,16 @@ function formatGroupedRejectionReasons(rejectionCounts: Map<string, number>) {
     .join("\n");
 }
 
+function describeSupabaseError(error: { message?: string; code?: string }) {
+  const message = error.message ?? "Supabase operation failed.";
+
+  if (error.code === "42501" || /row-level security|rls/i.test(message)) {
+    return `RLS error: ${message}`;
+  }
+
+  return message;
+}
+
 function startOfTodayIso() {
   const date = new Date();
   date.setHours(0, 0, 0, 0);
@@ -901,4 +1219,11 @@ function startOfTodayIso() {
 interface ActionContext {
   supabase: SupabaseClient;
   userId: string;
+}
+
+interface DraftCandidate {
+  product: SupplierProduct;
+  analysis: ProductAnalysis;
+  analysisId: string | null;
+  failureReason?: string;
 }

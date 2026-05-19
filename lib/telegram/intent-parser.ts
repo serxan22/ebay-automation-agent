@@ -60,6 +60,7 @@ export const TelegramIntentParametersSchema = z
     approval_mode: z.enum(["manual", "trusted_auto", "full_auto"]).nullable().default(null),
     timeframe: z.enum(["today", "tomorrow", "daily", "weekly"]).nullable().default(null),
     publish_mode: z.enum(["sandbox_only"]).nullable().default(null),
+    draft_source: z.enum(["latest_products", "approved_products"]).nullable().default(null),
     user_question: NullableStringSchema.default(null)
   })
   .strict()
@@ -74,6 +75,7 @@ export const TelegramIntentParametersSchema = z
     approval_mode: null,
     timeframe: null,
     publish_mode: null,
+    draft_source: null,
     user_question: null
   });
 
@@ -166,24 +168,30 @@ export async function parseTelegramIntent({
         ]
       });
 
-      return normalizeIntent(TelegramIntentPayloadSchema.parse(parsed), "ai");
+      return coerceDraftIntentForMessage(
+        normalizeIntent(TelegramIntentPayloadSchema.parse(parsed), "ai"),
+        message
+      );
     } catch (error) {
       const fallback = parseTelegramIntentHeuristically(message, settings);
       const reason = error instanceof Error ? error.message : "AI parser returned invalid JSON.";
 
-      return {
-        ...fallback,
-        parser_warning: `AI parser failed, deterministic fallback used. ${reason}`
-      };
+      return coerceDraftIntentForMessage(
+        {
+          ...fallback,
+          parser_warning: `AI parser failed, deterministic fallback used. ${reason}`
+        },
+        message
+      );
     }
   }
 
   const fallback = parseTelegramIntentHeuristically(message, settings);
 
-  return {
+  return coerceDraftIntentForMessage({
     ...fallback,
     parser_warning: parserStatus.warning
-  };
+  }, message);
 }
 
 export function parseTelegramIntentHeuristically(
@@ -203,6 +211,7 @@ export function parseTelegramIntentHeuristically(
   const riskTolerance = extractRiskTolerance(text);
   const language = detectLanguage(text);
   const parameters = defaultIntentParameters();
+  parameters.user_question = message;
 
   if (quantity) {
     parameters.quantity = quantity;
@@ -391,9 +400,17 @@ export function parseTelegramIntentHeuristically(
     });
   }
 
-  if (/(draft|listing draft|qaralama|taslak)/.test(text) && /(create|yarat|olustur|oluştur|hazirla|hazırla)/.test(text)) {
+  if (isApprovedDraftRequest(text)) {
     return makeIntent("CREATE_LISTING_DRAFTS", language, {
-      parameters,
+      parameters: { ...parameters, draft_source: "approved_products" },
+      confidence: 0.88,
+      safe_response: "Approved məhsullardan listing draftları yaradacam."
+    });
+  }
+
+  if (isCreateDraftRequest(text)) {
+    return makeIntent("CREATE_LISTING_DRAFTS", language, {
+      parameters: { ...parameters, draft_source: "latest_products" },
       confidence: 0.8,
       safe_response: "Safe məhsullardan listing draftları yaradacam."
     });
@@ -490,6 +507,22 @@ export function parseDeterministicControlIntent(
     });
   }
 
+  if (isApprovedDraftRequest(text)) {
+    return makeIntent("CREATE_LISTING_DRAFTS", language, {
+      parameters: { quantity: extractQuantity(text) ?? null, draft_source: "approved_products", user_question: message },
+      confidence: 0.9,
+      safe_response: "Approved məhsullardan listing draftları yaradacam."
+    });
+  }
+
+  if (isCreateDraftRequest(text)) {
+    return makeIntent("CREATE_LISTING_DRAFTS", language, {
+      parameters: { quantity: extractQuantity(text) ?? null, draft_source: "latest_products", user_question: message },
+      confidence: 0.88,
+      safe_response: "Safe məhsullardan listing draftları yaradacam."
+    });
+  }
+
   return null;
 }
 
@@ -525,7 +558,10 @@ export const telegramIntentExamples: Array<{ message: string; expectedIntent: Te
   { message: "show status", expectedIntent: "SHOW_STATUS" },
   { message: "minimum profit 0.5 dollar olsun", expectedIntent: "CHANGE_MIN_PROFIT" },
   { message: "risk tolerance 40 olsun", expectedIntent: "CHANGE_RISK_TOLERANCE" },
-  { message: "test mode aktiv et", expectedIntent: "ENABLE_TEST_MODE" }
+  { message: "test mode aktiv et", expectedIntent: "ENABLE_TEST_MODE" },
+  { message: "3 məhsul analiz et və draft yarat", expectedIntent: "CREATE_LISTING_DRAFTS" },
+  { message: "son 3 approved məhsuldan listing draft yarat", expectedIntent: "CREATE_LISTING_DRAFTS" },
+  { message: "create drafts from approved products", expectedIntent: "CREATE_LISTING_DRAFTS" }
 ];
 
 export function runTelegramIntentExamples() {
@@ -635,6 +671,7 @@ function normalizeParameters(parameters?: Partial<TelegramIntent["parameters"]> 
     approval_mode: raw.approval_mode ?? null,
     timeframe: raw.timeframe ?? null,
     publish_mode: raw.publish_mode ?? null,
+    draft_source: raw.draft_source ?? null,
     user_question: raw.user_question ?? null
   });
 }
@@ -651,8 +688,34 @@ function defaultIntentParameters(): z.infer<typeof TelegramIntentParametersSchem
     approval_mode: null,
     timeframe: null,
     publish_mode: null,
+    draft_source: null,
     user_question: null
   };
+}
+
+function coerceDraftIntentForMessage(intent: TelegramIntent, message: string) {
+  const text = normalizeCommandText(message);
+
+  if (!isCreateDraftRequest(text) && !isApprovedDraftRequest(text)) {
+    return intent;
+  }
+
+  const draftSource = isApprovedDraftRequest(text) ? "approved_products" : "latest_products";
+
+  return TelegramIntentSchema.parse({
+    ...intent,
+    intent: "CREATE_LISTING_DRAFTS",
+    confidence: Math.max(intent.confidence, 0.82),
+    should_execute: true,
+    needs_confirmation: false,
+    parameters: {
+      ...intent.parameters,
+      draft_source: intent.parameters.draft_source ?? draftSource,
+      quantity: intent.parameters.quantity ?? extractQuantity(text) ?? null,
+      user_question: intent.parameters.user_question ?? message
+    },
+    safe_response: intent.safe_response || "Safe məhsullardan listing draftları yaradacam."
+  });
 }
 
 function extractQuantity(text: string) {
@@ -780,6 +843,15 @@ function isUnsafeDropshippingRequest(text: string) {
 function isTestModeRequest(text: string) {
   return /(test mode|test qayda|qaydalari test|qaydaları test|test ucun|test üçün|yumşalt|yumsalt)/.test(text) &&
     /(aktiv|enable|et|ele|elə|yumsalt|yumşalt|mode|qayda)/.test(text);
+}
+
+function isApprovedDraftRequest(text: string) {
+  return /(approved|təsdiq|tesdiq|uygun|uyğun)/.test(text) && isCreateDraftRequest(text);
+}
+
+function isCreateDraftRequest(text: string) {
+  return /(draft|listing draft|qaralama|taslak)/.test(text) &&
+    /(create|yarat|olustur|oluştur|hazirla|hazırla|analyz|analyse|analyze|analiz)/.test(text);
 }
 
 function extractBlockedCategory(message: string) {

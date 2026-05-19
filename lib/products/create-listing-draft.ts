@@ -40,3 +40,36 @@ export function createListingDraft({
     aiGenerated: true
   };
 }
+
+export function createSafeFallbackListingGeneration(
+  product: SupplierProduct,
+  analysis?: ProductAnalysis
+): ListingGenerationResult {
+  const title = (product.title || product.supplierSku || "Supplier product").replace(/\s+/g, " ").trim().slice(0, 80);
+  const description = product.description?.trim() || "Supplier description was not provided. Review this draft before publishing.";
+
+  return {
+    ebayTitle: title,
+    ebayDescription: `<p>${escapeHtml(description)}</p>`,
+    bulletPoints: [],
+    itemSpecifics: {},
+    categorySuggestion: product.category ?? "General",
+    seoKeywords: [],
+    shippingNote: `Supplier feed shipping time: ${product.shippingDays} days.`,
+    returnNote: "Returns follow the seller's active eBay return policy.",
+    conditionNote: "Review supplier data before publishing.",
+    warnings: [
+      "Safe fallback listing content was used.",
+      ...(analysis?.rejectionReasons ?? [])
+    ]
+  };
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}

@@ -22,6 +22,7 @@ Allowed JSON shape:
     "approval_mode": "manual" | "trusted_auto" | "full_auto" | null,
     "timeframe": "today" | "tomorrow" | "daily" | "weekly" | null,
     "publish_mode": "sandbox_only" | null,
+    "draft_source": "latest_products" | "approved_products" | null,
     "user_question": string | null
   },
   "should_execute": boolean,
@@ -42,8 +43,10 @@ Classification rules:
 - "risk tolerance 40 olsun", "risk səviyyəsini 40 elə" => CHANGE_RISK_TOLERANCE with risk_tolerance 40.
 - "test mode aktiv et", "test qaydalarını yumşalt", "qaydaları test üçün yumşalt" => ENABLE_TEST_MODE.
 - Find/search products => FIND_PRODUCTS.
-- Analyze products => ANALYZE_PRODUCTS.
+- Analyze products only, without draft/listing creation language => ANALYZE_PRODUCTS.
+- If the message mentions both analysis and draft creation, e.g. "3 məhsul analiz et və draft yarat" or "analyze and create draft", use CREATE_LISTING_DRAFTS with draft_source "latest_products".
 - Create/build/generate drafts => CREATE_LISTING_DRAFTS.
+- "son 3 approved məhsuldan listing draft yarat", "approved məhsullardan draft yarat", "create drafts from approved products" => CREATE_LISTING_DRAFTS with draft_source "approved_products".
 - Publish/list safe drafts to eBay => PUBLISH_SAFE_DRAFTS_SANDBOX with publish_mode "sandbox_only".
 - Block a category, e.g. "electronics kateqoriyasını blokla" => UPDATE_BLOCKED_CATEGORY.
 - Block a brand => UPDATE_BLOCKED_BRAND.

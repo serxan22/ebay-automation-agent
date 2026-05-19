@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { logAutomationEvent } from "@/lib/automation/logging";
+import { getConfiguredAiProvider } from "@/lib/ai";
 import { generateListing } from "@/lib/ai/generate-listing";
-import { createListingDraft } from "@/lib/products/create-listing-draft";
+import {
+  createListingDraft,
+  createSafeFallbackListingGeneration
+} from "@/lib/products/create-listing-draft";
 import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 import type { AutomationSettings, ProductAnalysis, SupplierProduct } from "@/lib/types";
 
@@ -40,22 +44,33 @@ export async function POST(request: Request) {
 
     if (!payload.product.id) {
       return NextResponse.json(
-        { error: "supplier_product_id is required before saving a listing draft." },
+        { error: "missing supplier_product_id" },
         { status: 400 }
       );
     }
 
-    const generatedListing = await generateListing({
-      product: payload.product,
-      analysis: payload.analysis
-    });
+    if (!payload.analysisId) {
+      return NextResponse.json(
+        { error: "missing analysis_id" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isFinite(payload.analysis.recommendedEbayPrice)) {
+      return NextResponse.json(
+        { error: "missing price" },
+        { status: 400 }
+      );
+    }
+
+    const generatedListing = await generateListingForDraft(payload.product, payload.analysis);
     const draft = createListingDraft({
       product: payload.product,
       analysis: payload.analysis,
       settings: payload.settings,
       generatedListing,
       optimizedImageUrls: payload.optimizedImageUrls,
-      analysisId: payload.analysisId ?? null
+      analysisId: payload.analysisId
     });
     const { data, error } = await supabase
       .from("listing_drafts")
@@ -78,7 +93,7 @@ export async function POST(request: Request) {
       .single();
 
     if (error) {
-      throw new Error(error.message);
+      throw new Error(describeSupabaseError(error));
     }
 
     await logAutomationEvent({
@@ -86,7 +101,7 @@ export async function POST(request: Request) {
       userId: user.id,
       level: "success",
       module: "listing_drafts",
-      message: "Listing draft created.",
+      message: "draft_created",
       metadata: { draftId: data.id, supplierProductId: draft.supplierProductId }
     });
 
@@ -98,10 +113,40 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Listing draft creation failed." },
+      { error: error instanceof z.ZodError ? `validation error: ${error.message}` : error instanceof Error ? error.message : "Listing draft creation failed." },
       { status: 400 }
     );
   }
+}
+
+async function generateListingForDraft(product: SupplierProduct, analysis: ProductAnalysis) {
+  const provider = getConfiguredAiProvider();
+
+  if (!provider) {
+    return createSafeFallbackListingGeneration(product, analysis);
+  }
+
+  try {
+    const generated = await generateListing({ product, analysis });
+
+    if (generated.warnings.some((warning) => /AI provider fallback used/i.test(warning))) {
+      return createSafeFallbackListingGeneration(product, analysis);
+    }
+
+    return generated;
+  } catch {
+    return createSafeFallbackListingGeneration(product, analysis);
+  }
+}
+
+function describeSupabaseError(error: { message?: string; code?: string }) {
+  const message = error.message ?? "Supabase insert failed.";
+
+  if (error.code === "42501" || /row-level security|rls/i.test(message)) {
+    return `RLS error: ${message}`;
+  }
+
+  return message;
 }
 
 export async function PATCH(request: Request) {
