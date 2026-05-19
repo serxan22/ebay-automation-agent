@@ -5,6 +5,7 @@ alter table public.supplier_products enable row level security;
 alter table public.product_analysis enable row level security;
 alter table public.listing_drafts enable row level security;
 alter table public.ebay_accounts enable row level security;
+alter table public.ebay_oauth_states enable row level security;
 alter table public.ebay_listings enable row level security;
 alter table public.orders enable row level security;
 alter table public.agent_tasks enable row level security;
@@ -61,6 +62,11 @@ with check (auth.uid() = user_id);
 
 create policy "ebay_accounts_all_own"
 on public.ebay_accounts for all
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+create policy "ebay_oauth_states_all_own"
+on public.ebay_oauth_states for all
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
 

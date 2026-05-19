@@ -60,6 +60,7 @@ export async function optimizeProductImages({
         .jpeg({ quality: 88, mozjpeg: true })
         .toBuffer();
 
+      // TODO: add a full image automation queue for background optimization and upload retries.
       if (store && userId && supplierProductId) {
         const publicUrl = await storeOptimizedImage({
           userId,

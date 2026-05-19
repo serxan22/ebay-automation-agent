@@ -21,7 +21,7 @@ export function getEbayConfig(): EbayConfig {
 
   if (requestedEnvironment === "production") {
     throw new EbayIntegrationError(
-      "Production eBay publishing is disabled in Phase 2.",
+      "Production eBay publishing is disabled.",
       "PRODUCTION_DISABLED",
       getEbayErrorRecommendation("PRODUCTION_DISABLED")
     );

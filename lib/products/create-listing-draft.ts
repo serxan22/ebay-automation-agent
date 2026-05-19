@@ -45,14 +45,30 @@ export function createSafeFallbackListingGeneration(
   product: SupplierProduct,
   analysis?: ProductAnalysis
 ): ListingGenerationResult {
-  const title = (product.title || product.supplierSku || "Supplier product").replace(/\s+/g, " ").trim().slice(0, 80);
+  const title = [product.brand && !product.title.toLowerCase().includes(product.brand.toLowerCase()) ? product.brand : "", product.title || product.supplierSku, product.category]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
   const description = product.description?.trim() || "Supplier description was not provided. Review this draft before publishing.";
+  const bulletPoints = [
+    product.category ? `Category: ${product.category}` : "General merchandise item",
+    product.brand ? `Brand: ${product.brand}` : "Brand information not provided by supplier",
+    `Supplier feed handling time: ${product.shippingDays} days`,
+    "Listing uses supplier-provided facts only"
+  ];
 
   return {
     ebayTitle: title,
-    ebayDescription: `<p>${escapeHtml(description)}</p>`,
-    bulletPoints: [],
-    itemSpecifics: {},
+    ebayDescription: `<section><h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p><ul>${bulletPoints
+      .map((point) => `<li>${escapeHtml(point)}</li>`)
+      .join("")}</ul><p><strong>Shipping:</strong> Estimated handling time is based on supplier data.</p><p><strong>Returns:</strong> Returns follow the seller's active eBay return policy.</p></section>`,
+    bulletPoints,
+    itemSpecifics: {
+      ...(product.brand ? { Brand: product.brand } : {}),
+      ...(product.category ? { Type: product.category } : {})
+    },
     categorySuggestion: product.category ?? "General",
     seoKeywords: [],
     shippingNote: `Supplier feed shipping time: ${product.shippingDays} days.`,

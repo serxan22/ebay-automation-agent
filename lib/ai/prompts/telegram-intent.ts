@@ -8,7 +8,7 @@ Return only one valid JSON object. Do not use markdown, explanations, or code fe
 
 Allowed JSON shape:
 {
-  "intent": "RESUME_AUTOMATION" | "PAUSE_AUTOMATION" | "SHOW_STATUS" | "SHOW_DAILY_REPORT" | "CHANGE_DAILY_LIMIT" | "CHANGE_MIN_MARGIN" | "CHANGE_MIN_PROFIT" | "CHANGE_RISK_TOLERANCE" | "ENABLE_TEST_MODE" | "FIND_PRODUCTS" | "ANALYZE_PRODUCTS" | "CREATE_LISTING_DRAFTS" | "SHOW_LISTING_DRAFTS" | "APPROVE_DRAFTS" | "REVISE_DRAFT_HELP" | "PUBLISH_SAFE_DRAFTS_SANDBOX" | "SHOW_FAILED_TASKS" | "UPDATE_BLOCKED_CATEGORY" | "UPDATE_BLOCKED_BRAND" | "CHANGE_APPROVAL_MODE" | "EXPLAIN_SYSTEM" | "ASK_CLARIFICATION" | "UNKNOWN",
+  "intent": "RESUME_AUTOMATION" | "PAUSE_AUTOMATION" | "SHOW_STATUS" | "SHOW_DAILY_REPORT" | "CHANGE_DAILY_LIMIT" | "CHANGE_MIN_MARGIN" | "CHANGE_MIN_PROFIT" | "CHANGE_RISK_TOLERANCE" | "ENABLE_TEST_MODE" | "FIND_PRODUCTS" | "ANALYZE_PRODUCTS" | "CREATE_LISTING_DRAFTS" | "SHOW_LISTING_DRAFTS" | "APPROVE_DRAFTS" | "REVISE_DRAFT_HELP" | "SHOW_EBAY_READINESS" | "SYNC_EBAY_POLICIES" | "SETUP_EBAY_LOCATION" | "PUBLISH_SAFE_DRAFTS_SANDBOX" | "SHOW_FAILED_TASKS" | "UPDATE_BLOCKED_CATEGORY" | "UPDATE_BLOCKED_BRAND" | "CHANGE_APPROVAL_MODE" | "EXPLAIN_SYSTEM" | "ASK_CLARIFICATION" | "UNKNOWN",
   "confidence": number,
   "language": "az" | "tr" | "en" | "mixed",
   "parameters": {
@@ -52,6 +52,9 @@ Classification rules:
 - "approved draftları göstər", "show approved drafts" => SHOW_LISTING_DRAFTS with draft_status "approved".
 - "safe draftları approve et", "approve draftlarımı", "approve safe drafts" => APPROVE_DRAFTS. This approves draft rows only; it does not publish to eBay.
 - "draftı necə revise edim?", "revise draft help", "draft edit kömək" => REVISE_DRAFT_HELP.
+- "ebay status", "sandbox connection status", "draftlar publish üçün hazırdır?" => SHOW_EBAY_READINESS.
+- "seller policies sync et", "business policies yenilə" => SYNC_EBAY_POLICIES.
+- "inventory location qur", "warehouse location setup et" => SETUP_EBAY_LOCATION.
 - Publish/list safe drafts to eBay => PUBLISH_SAFE_DRAFTS_SANDBOX with publish_mode "sandbox_only".
 - Block a category, e.g. "electronics kateqoriyasını blokla" => UPDATE_BLOCKED_CATEGORY.
 - Block a brand => UPDATE_BLOCKED_BRAND.

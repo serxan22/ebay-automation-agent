@@ -27,7 +27,15 @@ export async function validateImageUrl(url: string): Promise<ImageValidationResu
   }
 
   try {
-    const response = await fetch(url, { method: "HEAD" });
+    let response = await fetch(url, { method: "HEAD" });
+
+    if (!response.ok && (response.status === 405 || response.status === 403)) {
+      response = await fetch(url, {
+        method: "GET",
+        headers: { Range: "bytes=0-2048" }
+      });
+    }
+
     const contentType = response.headers.get("content-type") ?? undefined;
     const contentLength = Number(response.headers.get("content-length") ?? 0);
 

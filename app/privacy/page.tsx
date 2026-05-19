@@ -18,7 +18,7 @@ export default function PrivacyPage() {
           <p className="text-sm font-semibold uppercase text-brand-700 dark:text-brand-300">Privacy Policy</p>
           <h1 className="mt-3 text-3xl font-semibold text-ink-950 dark:text-white">eBay Automation Agent</h1>
           <p className="mt-4 text-sm leading-6 text-ink-600 dark:text-ink-300">
-            eBay Automation Agent helps users test automation workflows with eBay sandbox authorization. This page
+            eBay Automation Agent is an eBay automation dashboard that helps users test automation workflows with eBay sandbox authorization. This page
             explains how the app handles account and automation data.
           </p>
 
@@ -48,6 +48,15 @@ export default function PrivacyPage() {
               Credentials and integration tokens are handled on the server. Users should keep their own application
               credentials private and remove access from the eBay Developer portal if they no longer want the app to
               connect to their sandbox account.
+            </PrivacySection>
+
+            <PrivacySection title="Disconnecting Access">
+              Users can disconnect eBay sandbox access from the app settings page. Disconnecting removes the stored
+              OAuth tokens from active use in the application.
+            </PrivacySection>
+
+            <PrivacySection title="Contact">
+              For privacy questions, contact the app owner at owner@example.com.
             </PrivacySection>
           </section>
         </div>

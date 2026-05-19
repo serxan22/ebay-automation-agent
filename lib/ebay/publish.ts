@@ -1,9 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
-import { getValidEbayAccessToken, hasRequiredSellerSetup, type EbayAccountRecord } from "@/lib/ebay/account";
+import { getEbayAccount, getValidEbayAccessToken, hasRequiredSellerSetup, type EbayAccountRecord } from "@/lib/ebay/account";
+import { getEbayConfig } from "@/lib/ebay/client";
 import { createOrReplaceInventoryItem } from "@/lib/ebay/inventory";
 import { createOffer, publishOffer } from "@/lib/ebay/offers";
 import { EbayIntegrationError, getEbayErrorRecommendation } from "@/lib/ebay/errors";
+import { validateListingReadiness } from "@/lib/listings/validate-listing-readiness";
 
 interface DraftProductRow {
   supplier_sku?: string | null;
@@ -38,28 +40,83 @@ export async function publishListingDraftToEbaySandbox({
   supabase,
   userId,
   draftId,
-  marketplaceId = process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US"
+  marketplaceId
 }: {
   supabase: SupabaseClient;
   userId: string;
   draftId: string;
   marketplaceId?: string;
 }): Promise<PublishListingResult> {
+  const config = getEbayConfig();
+  const resolvedMarketplaceId = marketplaceId ?? config.marketplaceId;
   const draft = await loadDraftForPublish({ supabase, userId, draftId });
   const attempt = (draft.publish_attempts ?? 0) + 1;
 
   try {
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "info",
+      module: "ebay_publish",
+      message: "ebay_publish_started",
+      metadata: { draftId, attempt, marketplaceId: resolvedMarketplaceId }
+    });
+
+    if (draft.status !== "approved") {
+      throw new EbayIntegrationError(
+        "Approve this draft before publishing.",
+        "PUBLISH_READINESS_FAILED",
+        getEbayErrorRecommendation("PUBLISH_READINESS_FAILED"),
+        { missing: ["Approve this draft before publishing."] }
+      );
+    }
+
+    const accountForReadiness = await getEbayAccount({
+      supabase,
+      userId,
+      marketplace: resolvedMarketplaceId
+    });
+    const readiness = await validateListingReadiness({
+      draft,
+      account: accountForReadiness,
+      checkImageAccessibility: true
+    });
+
+    if (!readiness.ready) {
+      await logAutomationEvent({
+        supabase,
+        userId,
+        level: "warning",
+        module: "ebay_publish",
+        message: "ebay_publish_validation_failed",
+        metadata: {
+          draftId,
+          score: readiness.score,
+          missing: readiness.missing,
+          warnings: readiness.warnings
+        }
+      });
+
+      throw new EbayIntegrationError(
+        `Listing is not ready for sandbox publishing: ${readiness.missing.join(", ")}.`,
+        "PUBLISH_READINESS_FAILED",
+        getEbayErrorRecommendation("PUBLISH_READINESS_FAILED"),
+        readiness
+      );
+    }
+
     validateDraftForPublish(draft);
     const { account, accessToken } = await getValidEbayAccessToken({
       supabase,
       userId,
-      marketplace: marketplaceId
+      marketplace: resolvedMarketplaceId
     });
     validateAccountForPublish(account);
 
     const product = getDraftProduct(draft);
     const sku = buildEbaySku(draft, product?.supplier_sku ?? undefined);
     const aspects = sanitizeAspects(draft.item_specifics ?? {});
+    const categoryId = draft.ebay_category_id ?? process.env.EBAY_SANDBOX_FALLBACK_CATEGORY_ID ?? "";
 
     await updateDraftAttempt({ supabase, userId, draftId, attempt, status: "approved" });
 
@@ -79,15 +136,15 @@ export async function publishListingDraftToEbaySandbox({
       userId,
       level: "success",
       module: "ebay_publish",
-      message: "Sandbox inventory item created or replaced.",
+      message: "ebay_inventory_item_created",
       metadata: { draftId, sku }
     });
 
     const offer = await createOffer(accessToken, {
       sku,
-      marketplaceId,
+      marketplaceId: resolvedMarketplaceId,
       availableQuantity: draft.quantity,
-      categoryId: draft.ebay_category_id ?? "",
+      categoryId,
       listingDescription: draft.ebay_description,
       price: Number(draft.price),
       currency: product?.currency ?? "USD",
@@ -102,7 +159,7 @@ export async function publishListingDraftToEbaySandbox({
       userId,
       level: "success",
       module: "ebay_publish",
-      message: "Sandbox offer created.",
+      message: "ebay_offer_created",
       metadata: { draftId, sku, offerId: offer.offerId }
     });
 
@@ -120,7 +177,8 @@ export async function publishListingDraftToEbaySandbox({
         ebay_error_code: null,
         ebay_error_json: {},
         publish_attempts: attempt,
-        last_publish_attempt_at: new Date().toISOString()
+        last_publish_attempt_at: new Date().toISOString(),
+        published_at: new Date().toISOString()
       })
       .eq("id", draft.id)
       .eq("user_id", userId);
@@ -144,7 +202,7 @@ export async function publishListingDraftToEbaySandbox({
       userId,
       level: "success",
       module: "ebay_publish",
-      message: "Sandbox listing published.",
+      message: "ebay_offer_published",
       metadata: { draftId, sku, offerId: offer.offerId, listingId }
     });
 
@@ -194,9 +252,10 @@ export async function recordDraftPublishError({
     userId,
     level: "error",
     module: "ebay_publish",
-    message: normalized.message,
+    message: "ebay_publish_failed",
     metadata: {
       draftId,
+      error: normalized.message,
       code: normalized.code,
       recommendation: normalized.recommendation,
       details: normalized.details
@@ -258,7 +317,7 @@ function validateDraftForPublish(draft: ListingDraftRow) {
     );
   }
 
-  if (!draft.ebay_category_id) {
+  if (!draft.ebay_category_id && !process.env.EBAY_SANDBOX_FALLBACK_CATEGORY_ID) {
     throw new EbayIntegrationError(
       "Missing eBay category ID.",
       "INVALID_CATEGORY",

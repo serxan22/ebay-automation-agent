@@ -1,6 +1,8 @@
 import { ListingDraftCard } from "@/components/listings/ListingDraftCard";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { EbayErrorGuide } from "@/components/ebay/EbayErrorGuide";
+import { getEbayAccount } from "@/lib/ebay/account";
+import { validateListingReadiness } from "@/lib/listings/validate-listing-readiness";
 import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 import type { ListingDraft } from "@/lib/types";
 
@@ -15,9 +17,9 @@ export default function ListingsPage() {
 async function ListingsContent({
   listingsPromise
 }: {
-  listingsPromise: Promise<{ drafts: ListingDraft[]; ebayConnected: boolean }>;
+  listingsPromise: Promise<{ drafts: ListingDraft[]; ebayConnected: boolean; ebaySetup: EbaySetupStatus }>;
 }) {
-  const { drafts, ebayConnected } = await listingsPromise;
+  const { drafts, ebayConnected, ebaySetup } = await listingsPromise;
   const draftCount = drafts.filter((draft) => draft.status === "draft").length;
   const approvedCount = drafts.filter((draft) => draft.status === "approved").length;
   const publishedCount = drafts.filter((draft) => draft.status === "published").length;
@@ -60,20 +62,26 @@ async function ListingsContent({
       <section className="rounded-lg border border-ink-200 bg-white p-5 dark:border-white/10 dark:bg-white/[0.04]">
         <h3 className="font-semibold text-ink-950 dark:text-white">eBay sandbox publish readiness</h3>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
-          {["Payment policy", "Return policy", "Fulfillment policy", "Inventory location"].map((item) => (
-            <div key={item} className="rounded-md bg-ink-50 p-3 text-sm text-ink-600 dark:bg-white/[0.04] dark:text-ink-300">
-              {item}: {ebayConnected ? "check Settings" : "missing"}
-            </div>
-          ))}
+          <SetupItem label="Payment policy" ok={ebaySetup.paymentPolicy} />
+          <SetupItem label="Return policy" ok={ebaySetup.returnPolicy} />
+          <SetupItem label="Fulfillment policy" ok={ebaySetup.fulfillmentPolicy} />
+          <SetupItem label="Inventory location" ok={ebaySetup.inventoryLocation} />
         </div>
       </section>
     </div>
   );
 }
 
-async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; ebayConnected: boolean }> {
+interface EbaySetupStatus {
+  paymentPolicy: boolean;
+  returnPolicy: boolean;
+  fulfillmentPolicy: boolean;
+  inventoryLocation: boolean;
+}
+
+async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; ebayConnected: boolean; ebaySetup: EbaySetupStatus }> {
   if (!hasSupabaseServerEnv()) {
-    return { drafts: [], ebayConnected: false };
+    return { drafts: [], ebayConnected: false, ebaySetup: emptyEbaySetup() };
   }
 
   const supabase = createSupabaseServerClient();
@@ -82,34 +90,42 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return { drafts: [], ebayConnected: false };
+    return { drafts: [], ebayConnected: false, ebaySetup: emptyEbaySetup() };
   }
 
-  const [draftsResponse, ebayResponse] = await Promise.all([
+  const [draftsResponse, account] = await Promise.all([
     supabase
       .from("listing_drafts")
       .select(
-        "id,user_id,supplier_product_id,analysis_id,ebay_title,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,status,ai_generated,error_message,ebay_error_code,ebay_offer_id,ebay_item_id,ebay_sku,publish_attempts,last_publish_attempt_at,supplier_products(title,supplier_sku),product_analysis(estimated_profit,margin_percentage,risk_score,final_score,ai_notes,rejection_reasons)"
+        "id,user_id,supplier_product_id,analysis_id,ebay_title,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,status,ai_generated,error_message,ebay_error_code,ebay_offer_id,ebay_item_id,ebay_sku,publish_attempts,last_publish_attempt_at,published_at,supplier_products(title,supplier_sku),product_analysis(estimated_profit,margin_percentage,risk_score,final_score,ai_notes,rejection_reasons)"
       )
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
       .limit(50),
-    supabase
-      .from("ebay_accounts")
-      .select("status,marketplace")
-      .eq("user_id", user.id)
-      .eq("marketplace", process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US")
-      .maybeSingle()
+    getEbayAccount({ supabase, userId: user.id })
   ]);
 
   if (draftsResponse.error) {
     throw new Error(draftsResponse.error.message);
   }
 
-  const drafts = (draftsResponse.data ?? []).map((draft) => {
+  const drafts = await Promise.all((draftsResponse.data ?? []).map(async (draft) => {
     const row = draft as Record<string, any>;
     const supplierProduct = getEmbeddedRow(row.supplier_products);
     const analysis = getEmbeddedRow(row.product_analysis);
+    const readiness = await validateListingReadiness({
+      draft: {
+        status: row.status,
+        ebay_title: row.ebay_title,
+        ebay_description: row.ebay_description,
+        ebay_category_id: row.ebay_category_id,
+        item_specifics: row.item_specifics,
+        quantity: row.quantity,
+        price: row.price,
+        optimized_image_urls: row.optimized_image_urls
+      },
+      account
+    });
 
     return {
       id: row.id as string,
@@ -140,13 +156,38 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
       ebayItemId: row.ebay_item_id as string | null,
       ebaySku: row.ebay_sku as string | null,
       publishAttempts: Number(row.publish_attempts ?? 0),
-      lastPublishAttemptAt: row.last_publish_attempt_at as string | null
+      lastPublishAttemptAt: row.last_publish_attempt_at as string | null,
+      publishedAt: row.published_at as string | null,
+      readiness
     };
-  });
+  }));
 
   return {
     drafts,
-    ebayConnected: ebayResponse.data?.status === "connected"
+    ebayConnected: account?.status === "connected",
+    ebaySetup: {
+      paymentPolicy: Boolean(account?.payment_policy_id),
+      returnPolicy: Boolean(account?.return_policy_id),
+      fulfillmentPolicy: Boolean(account?.fulfillment_policy_id),
+      inventoryLocation: Boolean(account?.inventory_location_key)
+    }
+  };
+}
+
+function SetupItem({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <div className="rounded-md bg-ink-50 p-3 text-sm text-ink-600 dark:bg-white/[0.04] dark:text-ink-300">
+      {label}: {ok ? "ready" : "missing"}
+    </div>
+  );
+}
+
+function emptyEbaySetup(): EbaySetupStatus {
+  return {
+    paymentPolicy: false,
+    returnPolicy: false,
+    fulfillmentPolicy: false,
+    inventoryLocation: false
   };
 }
 

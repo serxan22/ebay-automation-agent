@@ -1,7 +1,11 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { logAutomationEvent } from "@/lib/automation/logging";
+import { getEbayConfig } from "@/lib/ebay/client";
 import { buildEbayOAuthUrl } from "@/lib/ebay/oauth";
-import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
+import { createEbayOAuthState } from "@/lib/ebay/oauth-state";
+import { createSupabaseServerClient, createSupabaseServiceClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
@@ -18,17 +22,47 @@ export async function GET(request: Request) {
       return NextResponse.redirect(new URL("/login", request.url));
     }
 
-    const state = crypto.randomUUID();
-    cookies().set("ebay_oauth_state", state, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 10 * 60
+    const serviceSupabase = createSupabaseServiceClient();
+    const config = getEbayConfig();
+
+    await logAutomationEvent({
+      supabase: serviceSupabase,
+      userId: user.id,
+      level: "info",
+      module: "ebay_oauth",
+      message: "ebay_oauth_started",
+      metadata: {
+        environment: config.environment,
+        marketplace: config.marketplaceId,
+        hasClientId: Boolean(config.clientId),
+        hasRuname: Boolean(config.runame),
+        redirectUriMode: config.redirectUriMode
+      }
     });
 
-    return NextResponse.redirect(buildEbayOAuthUrl(state));
+    const oauthState = await createEbayOAuthState({
+      supabase: serviceSupabase,
+      userId: user.id
+    });
+
+    await logAutomationEvent({
+      supabase: serviceSupabase,
+      userId: user.id,
+      level: "success",
+      module: "ebay_oauth",
+      message: "ebay_oauth_state_saved",
+      metadata: {
+        stateId: oauthState.id,
+        createdAt: oauthState.created_at
+      }
+    });
+
+    return NextResponse.redirect(buildEbayOAuthUrl(oauthState.state));
   } catch (error) {
+    console.error("[ebay_oauth] start_failed", {
+      name: error instanceof Error ? error.name : "UnknownError",
+      message: error instanceof Error ? error.message : "OAuth start failed."
+    });
     return redirectToSettings(request, error instanceof Error ? error.message : "oauth_start_failed");
   }
 }

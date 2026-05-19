@@ -45,8 +45,8 @@ export async function GET() {
         userId,
         level: "error",
         module: "ebay_location",
-        message: normalized.message,
-        metadata: { code: normalized.code, recommendation: normalized.recommendation, details: normalized.details }
+        message: "ebay_location_setup_failed",
+        metadata: { error: normalized.message, code: normalized.code, recommendation: normalized.recommendation, details: normalized.details }
       });
     }
 
@@ -88,8 +88,8 @@ export async function POST(request: Request) {
         userId,
         level: "error",
         module: "ebay_location",
-        message: normalized.message,
-        metadata: { code: normalized.code, recommendation: normalized.recommendation, details: normalized.details }
+        message: "ebay_location_setup_failed",
+        metadata: { error: normalized.message, code: normalized.code, recommendation: normalized.recommendation, details: normalized.details }
       });
     }
 

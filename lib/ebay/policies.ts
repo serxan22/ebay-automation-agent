@@ -2,6 +2,7 @@ import { ebayFetch } from "@/lib/ebay/client";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getValidEbayAccessToken } from "@/lib/ebay/account";
+import { EbayIntegrationError, getEbayErrorRecommendation } from "@/lib/ebay/errors";
 
 interface SellerPolicy {
   name: string;
@@ -45,6 +46,15 @@ export async function syncSellerPolicies({
   userId: string;
   marketplaceId?: string;
 }) {
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "ebay_policies",
+    message: "ebay_policy_sync_started",
+    metadata: { marketplaceId }
+  });
+
   const { account, accessToken } = await getValidEbayAccessToken({
     supabase,
     userId,
@@ -59,6 +69,7 @@ export async function syncSellerPolicies({
   const paymentPolicy = chooseDefaultPolicy(payment.paymentPolicies);
   const returnPolicy = chooseDefaultPolicy(returnPolicies.returnPolicies);
   const fulfillmentPolicy = chooseDefaultPolicy(fulfillment.fulfillmentPolicies);
+  const hasAllPolicies = Boolean(paymentPolicy && returnPolicy && fulfillmentPolicy);
 
   const { data, error } = await supabase
     .from("ebay_accounts")
@@ -80,15 +91,34 @@ export async function syncSellerPolicies({
     throw new Error(error.message);
   }
 
+  if (!hasAllPolicies) {
+    const message =
+      "No seller policies found in sandbox account. Create payment, return, and fulfillment policies in eBay sandbox seller settings, then sync again.";
+
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "warning",
+      module: "ebay_policies",
+      message: "ebay_policy_sync_failed",
+      metadata: {
+        marketplaceId,
+        paymentPolicies: payment.paymentPolicies.length,
+        returnPolicies: returnPolicies.returnPolicies.length,
+        fulfillmentPolicies: fulfillment.fulfillmentPolicies.length,
+        reason: "missing_required_seller_policies"
+      }
+    });
+
+    throw new EbayIntegrationError(message, "MISSING_POLICY_ID", getEbayErrorRecommendation("MISSING_POLICY_ID"));
+  }
+
   await logAutomationEvent({
     supabase,
     userId,
-    level: paymentPolicy && returnPolicy && fulfillmentPolicy ? "success" : "warning",
+    level: "success",
     module: "ebay_policies",
-    message:
-      paymentPolicy && returnPolicy && fulfillmentPolicy
-        ? "eBay sandbox seller policies synced."
-        : "eBay sandbox seller policies synced, but one or more required policies are missing.",
+    message: "ebay_policy_sync_success",
     metadata: {
       marketplaceId,
       paymentPolicies: payment.paymentPolicies.length,

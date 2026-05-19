@@ -41,6 +41,8 @@ export function ListingDraftCard({
     draft.marginPercentage != null ||
     draft.riskScore != null ||
     draft.finalScore != null;
+  const readiness = draft.readiness;
+  const publishDisabledReason = getPublishDisabledReason(draft, ebayConnected);
 
   async function approveDraft() {
     if (!draft.id) {
@@ -164,12 +166,29 @@ export function ListingDraftCard({
           label="Margin"
           value={draft.marginPercentage == null ? "Not analyzed" : `${draft.marginPercentage.toFixed(1)}%`}
         />
+        <Metric
+          label="Readiness"
+          value={readiness ? `${readiness.score}/100 ${readiness.ready ? "Ready" : "Needs work"}` : "Not checked"}
+        />
       </div>
 
       {hasAnalysisContext ? (
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <Metric label="Risk score" value={draft.riskScore == null ? "Not analyzed" : `${draft.riskScore}/100`} />
           <Metric label="Final score" value={draft.finalScore == null ? "Not analyzed" : `${draft.finalScore}/100`} />
+          <Metric label="Publish eligibility" value={publishDisabledReason ? "Blocked" : "Eligible"} />
+        </div>
+      ) : null}
+
+      {readiness && (!readiness.ready || readiness.warnings.length > 0) ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
+          <p className="font-medium">Publish readiness</p>
+          {readiness.missing.length ? (
+            <p className="mt-1">Missing: {readiness.missing.slice(0, 6).join(", ")}</p>
+          ) : null}
+          {readiness.warnings.length ? (
+            <p className="mt-1">Warnings: {readiness.warnings.slice(0, 3).join(", ")}</p>
+          ) : null}
         </div>
       ) : null}
 
@@ -201,7 +220,8 @@ export function ListingDraftCard({
           draftId={draft.id}
           status={draft.status}
           ebayConnected={ebayConnected}
-          disabled={draft.status !== "approved"}
+          disabled={Boolean(publishDisabledReason)}
+          disabledReason={publishDisabledReason}
         />
       </div>
 
@@ -360,4 +380,20 @@ function getFeedbackClassName(tone: Feedback["tone"]) {
 
 function stripHtml(value: string) {
   return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function getPublishDisabledReason(draft: ListingDraft, ebayConnected: boolean) {
+  if (draft.status !== "approved") {
+    return "Approve this draft before publishing.";
+  }
+
+  if (!ebayConnected) {
+    return "Connect eBay sandbox first in Settings.";
+  }
+
+  if (draft.readiness && !draft.readiness.ready) {
+    return `Fix readiness issues: ${draft.readiness.missing.slice(0, 4).join(", ")}.`;
+  }
+
+  return "";
 }

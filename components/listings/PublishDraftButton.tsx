@@ -10,20 +10,27 @@ export function PublishDraftButton({
   draftId,
   status,
   ebayConnected,
-  disabled
+  disabled,
+  disabledReason
 }: {
   draftId?: string;
   status: ListingDraftStatus;
   ebayConnected: boolean;
   disabled?: boolean;
+  disabledReason?: string;
 }) {
   const router = useRouter();
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function publish() {
+    if (disabledReason) {
+      setMessage(disabledReason);
+      return;
+    }
+
     if (status !== "approved") {
-      setMessage("Approve this draft before sandbox publishing.");
+      setMessage("Approve this draft before publishing.");
       return;
     }
 
@@ -79,7 +86,9 @@ export function PublishDraftButton({
       <Button variant="ghost" onClick={publish} disabled={disabled || loading}>
         <Send size={16} /> {loading ? "Publishing..." : "Publish sandbox"}
       </Button>
-      {message ? <p className="max-w-lg text-xs text-ink-500 dark:text-ink-400">{message}</p> : null}
+      {message || disabledReason ? (
+        <p className="max-w-lg text-xs text-ink-500 dark:text-ink-400">{message || disabledReason}</p>
+      ) : null}
     </div>
   );
 }

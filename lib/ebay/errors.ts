@@ -13,9 +13,13 @@ export class EbayIntegrationError extends Error {
 
 export function getEbayErrorRecommendation(code: string) {
   const recommendations: Record<string, string> = {
-    PRODUCTION_DISABLED: "Use eBay sandbox credentials and EBAY_ENVIRONMENT=sandbox for Phase 2.",
+    PRODUCTION_DISABLED: "Use eBay sandbox credentials and EBAY_ENVIRONMENT=sandbox.",
     MISSING_EBAY_ENV: "Add eBay sandbox client ID, client secret, RuName, and callback URL to your environment.",
+    OAUTH_STATE_INVALID: "Start eBay sandbox connection again from Settings.",
+    OAUTH_STATE_EXPIRED: "Start eBay sandbox connection again; OAuth state links expire after 15 minutes.",
+    TOKEN_EXCHANGE_FAILED: "Confirm EBAY_RUNAME matches the eBay Developer portal RuName and retry Connect sandbox.",
     TOKEN_EXPIRED: "Reconnect eBay or refresh the OAuth token before publishing.",
+    PUBLISH_READINESS_FAILED: "Fix the listed readiness issues before publishing to eBay sandbox.",
     MISSING_POLICY_ID: "Go to eBay settings and select payment, return, and fulfillment policies.",
     MISSING_LOCATION: "Create or select an eBay inventory location key.",
     INVALID_CATEGORY: "Review the suggested eBay category and required item specifics.",

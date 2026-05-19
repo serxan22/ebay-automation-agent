@@ -79,7 +79,7 @@ function createFallbackListing(
   const escapedDescription = escapeHtml(product.description ?? "Quality item supplied by an approved resale source.");
   const category = product.category ?? "General Merchandise";
   const bulletPoints = [
-    `Designed for ${category.toLowerCase()} use`,
+    `Suitable for ${category.toLowerCase()} needs`,
     product.brand ? `Brand: ${product.brand}` : "Brand information not provided by supplier",
     `Ships based on supplier-confirmed handling time of ${product.shippingDays} days`,
     "Listing content uses supplier-provided facts only"
@@ -92,7 +92,9 @@ function createFallbackListing(
         <h2>${escapeHtml(title)}</h2>
         <p>${escapedDescription}</p>
         <ul>${bulletPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>
-        <p><strong>Seller note:</strong> Product details are verified against supplier data before approval.</p>
+        <p><strong>Shipping:</strong> ${escapeHtml(`Estimated handling time is based on the supplier feed: ${product.shippingDays} days.`)}</p>
+        <p><strong>Returns:</strong> Returns follow the seller's active eBay return policy.</p>
+        <p><strong>Seller note:</strong> Product details are reviewed against supplier data before approval.</p>
       </section>
     `.trim(),
     bulletPoints,
@@ -112,12 +114,18 @@ function createFallbackListing(
 }
 
 function buildSafeTitle(product: SupplierProduct) {
+  const titleIncludesBrand =
+    product.brand && new RegExp(`\\b${escapeRegExp(product.brand)}\\b`, "i").test(product.title);
   const pieces = [
-    product.brand && !/unbranded/i.test(product.brand) ? product.brand : "",
+    product.brand && !/unbranded/i.test(product.brand) && !titleIncludesBrand ? product.brand : "",
     product.title,
     product.category
   ].filter(Boolean);
   return pieces.join(" ").replace(/\s+/g, " ").slice(0, 80).trim();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function deriveKeywords(product: SupplierProduct) {

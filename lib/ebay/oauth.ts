@@ -1,4 +1,5 @@
 import { getEbayApiBaseUrl, getEbayConfig } from "@/lib/ebay/client";
+import { EbayIntegrationError, getEbayErrorRecommendation } from "@/lib/ebay/errors";
 
 const scopes = [
   "https://api.ebay.com/oauth/api_scope",
@@ -53,7 +54,13 @@ export async function exchangeEbayCodeForTokens(code: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`eBay token exchange failed: ${await response.text()}`);
+    throw new EbayIntegrationError(
+      `eBay token exchange failed (${response.status}): ${await response.text()}`,
+      "TOKEN_EXCHANGE_FAILED",
+      getEbayErrorRecommendation("TOKEN_EXCHANGE_FAILED"),
+      { status: response.status, statusText: response.statusText },
+      response.status
+    );
   }
 
   return (await response.json()) as {
@@ -62,6 +69,25 @@ export async function exchangeEbayCodeForTokens(code: string) {
     expires_in: number;
     refresh_token_expires_in: number;
     scope?: string;
+  };
+}
+
+export async function getEbayUserIdentity(accessToken: string) {
+  const config = getEbayConfig();
+  const response = await fetch(`${getEbayApiBaseUrl(config.environment)}/commerce/identity/v1/user/`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`eBay identity lookup failed (${response.status}).`);
+  }
+
+  return (await response.json()) as {
+    userId?: string;
+    username?: string;
   };
 }
 
@@ -82,7 +108,13 @@ export async function refreshEbayAccessToken(refreshToken: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`eBay token refresh failed: ${await response.text()}`);
+    throw new EbayIntegrationError(
+      `eBay token refresh failed (${response.status}): ${await response.text()}`,
+      "TOKEN_EXPIRED",
+      getEbayErrorRecommendation("TOKEN_EXPIRED"),
+      { status: response.status, statusText: response.statusText },
+      response.status
+    );
   }
 
   return (await response.json()) as {

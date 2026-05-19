@@ -12,13 +12,24 @@ export async function GET() {
       connected: account?.status === "connected",
       account: account
         ? {
+            ebayUserId: account.ebay_user_id,
             marketplace: account.marketplace,
             status: account.status,
             tokenExpiresAt: account.token_expires_at,
-            paymentPolicyId: account.payment_policy_id,
-            returnPolicyId: account.return_policy_id,
-            fulfillmentPolicyId: account.fulfillment_policy_id,
-            inventoryLocationKey: account.inventory_location_key
+            hasRefreshToken: Boolean(account.refresh_token_encrypted),
+            policies: {
+              payment: Boolean(account.payment_policy_id),
+              return: Boolean(account.return_policy_id),
+              fulfillment: Boolean(account.fulfillment_policy_id),
+              paymentPolicyId: account.payment_policy_id,
+              returnPolicyId: account.return_policy_id,
+              fulfillmentPolicyId: account.fulfillment_policy_id
+            },
+            inventoryLocation: {
+              present: Boolean(account.inventory_location_key),
+              key: account.inventory_location_key,
+              status: account.inventory_location_status
+            }
           }
         : null
     });

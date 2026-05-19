@@ -19,6 +19,9 @@ export const TelegramIntentNameSchema = z.enum([
   "SHOW_LISTING_DRAFTS",
   "APPROVE_DRAFTS",
   "REVISE_DRAFT_HELP",
+  "SHOW_EBAY_READINESS",
+  "SYNC_EBAY_POLICIES",
+  "SETUP_EBAY_LOCATION",
   "PUBLISH_SAFE_DRAFTS_SANDBOX",
   "SHOW_FAILED_TASKS",
   "UPDATE_BLOCKED_CATEGORY",
@@ -262,6 +265,30 @@ export function parseTelegramIntentHeuristically(
       clarifying_question: "Production publishing hazırda safety üçün bağlıdır. Sandbox-da test etmək istəyirsən?",
       safe_response: "Production publishing safety üçün bağlıdır. Sandbox test edə bilərəm.",
       parameters: { ...parameters, publish_mode: null, user_question: message }
+    });
+  }
+
+  if (isEbayPolicySyncRequest(text)) {
+    return makeIntent("SYNC_EBAY_POLICIES", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.9,
+      safe_response: "eBay sandbox seller policies sync edilir."
+    });
+  }
+
+  if (isEbayLocationSetupRequest(text)) {
+    return makeIntent("SETUP_EBAY_LOCATION", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.9,
+      safe_response: "eBay sandbox inventory location qurulur."
+    });
+  }
+
+  if (isEbayReadinessRequest(text)) {
+    return makeIntent("SHOW_EBAY_READINESS", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.9,
+      safe_response: "eBay sandbox readiness statusunu yoxlayıram."
     });
   }
 
@@ -919,6 +946,18 @@ function isApprovedDraftRequest(text: string) {
 function isShowListingDraftsRequest(text: string) {
   return /(draft|draftlar|draftlari|draftları|listing draft|qaralama|taslak)/.test(text) &&
     /(goster|göstər|show|var|list|siyahi|siyahı|hansi|hansı)/.test(text);
+}
+
+function isEbayReadinessRequest(text: string) {
+  return /(ebay|sandbox).*(status|connection|connected|readiness|ready|hazir|hazır|veziyyet|vəziyyət)|draft.*(publish.*hazir|publish.*hazır|ready)/.test(text);
+}
+
+function isEbayPolicySyncRequest(text: string) {
+  return /(seller polic|business polic|payment polic|return polic|fulfillment polic|policy|policies).*(sync|sinx|yenile|yenilə|et)/.test(text);
+}
+
+function isEbayLocationSetupRequest(text: string) {
+  return /(inventory location|location|warehouse|anbar).*(qur|setup|yarat|create|check|hazirla|hazırla)/.test(text);
 }
 
 function isApproveDraftsRequest(text: string) {

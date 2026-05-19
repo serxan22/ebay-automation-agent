@@ -38,8 +38,9 @@ export async function POST() {
         userId,
         level: "error",
         module: "ebay_policies",
-        message: normalized.message,
+        message: "ebay_policy_sync_failed",
         metadata: {
+          error: normalized.message,
           code: normalized.code,
           recommendation: normalized.recommendation,
           details: normalized.details

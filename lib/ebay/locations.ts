@@ -27,6 +27,8 @@ export interface EbayInventoryLocation {
   };
 }
 
+export const defaultSandboxInventoryLocationKey = "default-sandbox-location";
+
 export async function getInventoryLocations(accessToken: string) {
   return ebayFetch<{ locations?: EbayInventoryLocation[] }>({
     accessToken,
@@ -73,13 +75,22 @@ export async function ensureInventoryLocation({
   input?: Partial<EbayInventoryLocationInput>;
   marketplaceId?: string;
 }) {
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "ebay_location",
+    message: "ebay_location_setup_started",
+    metadata: { marketplaceId }
+  });
+
   const { account, accessToken } = await getValidEbayAccessToken({
     supabase,
     userId,
     marketplace: marketplaceId
   });
   const merchantLocationKey =
-    input?.merchantLocationKey ?? account.inventory_location_key ?? `agent-${userId.slice(0, 8)}-warehouse`;
+    input?.merchantLocationKey ?? account.inventory_location_key ?? defaultSandboxInventoryLocationKey;
   let location: EbayInventoryLocation | null = null;
 
   try {
@@ -133,7 +144,7 @@ export async function ensureInventoryLocation({
     userId,
     level: "success",
     module: "ebay_location",
-    message: "eBay sandbox inventory location checked.",
+    message: "ebay_location_setup_success",
     metadata: {
       marketplaceId,
       merchantLocationKey,

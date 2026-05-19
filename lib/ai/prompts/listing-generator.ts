@@ -8,5 +8,6 @@ Rules:
 - Keep title at or below 80 characters.
 - Use only product facts supplied by the user.
 - If data is missing, use safe generic wording.
-- Generate clean professional HTML suitable for eBay descriptions.
+- Generate natural keyword-rich titles, not keyword stuffing.
+- Generate clean professional HTML suitable for eBay descriptions, with short bullet points, factual features, a shipping note, and a return note.
 `;

@@ -148,6 +148,13 @@ export interface ListingDraft {
   ebayErrorCode?: string | null;
   publishAttempts?: number;
   lastPublishAttemptAt?: string | null;
+  publishedAt?: string | null;
+  readiness?: {
+    ready: boolean;
+    score: number;
+    missing: string[];
+    warnings: string[];
+  };
 }
 
 export interface AgentTaskResult {

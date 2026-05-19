@@ -46,12 +46,12 @@ export async function POST(_request: Request, { params }: { params: { draftId: s
         userId: user.id,
         level: "warning",
         module: "ebay_publish",
-        message: "Sandbox publish blocked because draft is not approved.",
+        message: "ebay_publish_validation_failed",
         metadata: { draftId: parsedParams.draftId, status: draft.status }
       });
 
       return NextResponse.json(
-        { ok: false, error: "Approve this draft before sandbox publishing.", code: "DRAFT_NOT_APPROVED" },
+        { ok: false, error: "Approve this draft before publishing.", code: "PUBLISH_READINESS_FAILED" },
         { status: 400 }
       );
     }

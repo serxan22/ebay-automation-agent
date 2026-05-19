@@ -1,8 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
+import { getEbayAccount } from "@/lib/ebay/account";
+import { ensureInventoryLocation } from "@/lib/ebay/locations";
+import { syncSellerPolicies } from "@/lib/ebay/policies";
 import { publishListingDraftToEbaySandbox } from "@/lib/ebay/publish";
 import { getConfiguredAiProvider } from "@/lib/ai";
 import { generateListing } from "@/lib/ai/generate-listing";
+import { validateListingReadiness } from "@/lib/listings/validate-listing-readiness";
 import { analyzeProduct } from "@/lib/products/analyze-product";
 import {
   createListingDraft,
@@ -147,6 +151,12 @@ export async function executeTelegramIntentAction({
       });
     case "REVISE_DRAFT_HELP":
       return reviseDraftHelp();
+    case "SHOW_EBAY_READINESS":
+      return showEbayReadiness({ supabase, userId });
+    case "SYNC_EBAY_POLICIES":
+      return syncEbayPoliciesFromTelegram({ supabase, userId });
+    case "SETUP_EBAY_LOCATION":
+      return setupEbayLocationFromTelegram({ supabase, userId });
     case "PUBLISH_SAFE_DRAFTS_SANDBOX":
       return publishSafeDraftsSandbox({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 5 });
     case "SHOW_FAILED_TASKS":
@@ -191,16 +201,36 @@ async function showStatus({ supabase, userId }: ActionContext) {
     supabase.from("supplier_products").select("id", { count: "exact", head: true }).eq("user_id", userId),
     supabase.from("listing_drafts").select("status").eq("user_id", userId).limit(250),
     supabase.from("agent_tasks").select("status").eq("user_id", userId).gte("created_at", startOfTodayIso()).limit(250),
-    supabase.from("ebay_accounts").select("status,marketplace").eq("user_id", userId).maybeSingle()
+    supabase
+      .from("ebay_accounts")
+      .select("status,marketplace,payment_policy_id,return_policy_id,fulfillment_policy_id,inventory_location_key")
+      .eq("user_id", userId)
+      .maybeSingle()
   ]);
   const draftRows = (drafts.data ?? []) as Array<{ status: string }>;
   const taskRows = (tasks.data ?? []) as Array<{ status: string }>;
   const activeDrafts = draftRows.filter((draft) => draft.status === "draft" || draft.status === "approved").length;
   const failedTasks = taskRows.filter((task) => task.status === "failed").length;
 
+  const ebayAccount = ebay.data as
+    | {
+        status?: string | null;
+        marketplace?: string | null;
+        payment_policy_id?: string | null;
+        return_policy_id?: string | null;
+        fulfillment_policy_id?: string | null;
+        inventory_location_key?: string | null;
+      }
+    | null;
+  const policiesReady = Boolean(
+    ebayAccount?.payment_policy_id && ebayAccount.return_policy_id && ebayAccount.fulfillment_policy_id
+  );
+  const locationReady = Boolean(ebayAccount?.inventory_location_key);
+
   return {
     ok: true,
     message: `Status: auto_listing_enabled ${settings.autoListingEnabled ? "true (aktivdir)" : "false (dayandırılıb)"}, daily_listing_limit ${settings.dailyListingLimit}, min_profit_amount $${settings.minProfitAmount}, min_margin_percentage ${settings.minMarginPercentage}%, risk_tolerance ${settings.riskTolerance}, max_shipping_days ${settings.maxShippingDays}, approval_mode ${settings.approvalMode}. Suppliers ${suppliers.count ?? 0}, products ${products.count ?? 0}, active drafts ${activeDrafts}, failed tasks today ${failedTasks}. eBay ${ebay.data?.status ?? "not connected"} (${ebay.data?.marketplace ?? "sandbox"}).`
+      + ` Policies ${policiesReady ? "ready" : "missing"}, inventory location ${locationReady ? "ready" : "missing"}.`
   };
 }
 
@@ -952,34 +982,119 @@ function reviseDraftHelp(): AgentTaskResult {
   return {
     ok: true,
     message:
-      "Draft revision hazırdır: dashboardda /dashboard/listings səhifəsinə gir, draft kartında Revise seç və eBay title, description, price, quantity, category ID, item specifics JSON və image URL-ləri dəyiş. Telegram approve edə bilər, amma revise üçün UI modal daha təhlükəsizdir."
+      "Draft revision hazırdır: dashboardda /dashboard/listings səhifəsinə gir, draft kartında Revise seç və eBay title, description, price, quantity, category ID, item specifics JSON və image URL-ləri dəyiş. Listing copy yeniləmək üçün title və description sahələrini orada revise et; Telegram approve edə bilər, amma revise üçün UI modal daha təhlükəsizdir."
   };
+}
+
+async function showEbayReadiness({ supabase, userId }: ActionContext) {
+  const account = await getEbayAccount({ supabase, userId });
+  const { data, error } = await supabase
+    .from("listing_drafts")
+    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,quantity,price,optimized_image_urls,error_message,ebay_error_code")
+    .eq("user_id", userId)
+    .in("status", ["approved", "draft", "failed"])
+    .order("updated_at", { ascending: false })
+    .limit(10);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const rows = (data ?? []) as Array<Record<string, any>>;
+  const readinessResults = await Promise.all(
+    rows.map((draft) =>
+      validateListingReadiness({
+        draft,
+        account
+      })
+    )
+  );
+  const readyCount = readinessResults.filter((result) => result.ready).length;
+  const firstMissing = readinessResults.find((result) => !result.ready)?.missing.slice(0, 4) ?? [];
+  const lastFailed = rows.find((row) => row.status === "failed");
+  const policiesReady = Boolean(account?.payment_policy_id && account.return_policy_id && account.fulfillment_policy_id);
+  const locationReady = Boolean(account?.inventory_location_key);
+
+  return {
+    ok: true,
+    message: [
+      `eBay sandbox: ${account?.status === "connected" ? "connected" : account?.status ?? "disconnected"} (${account?.marketplace ?? "EBAY_US"}).`,
+      `Policies: ${policiesReady ? "ready" : "missing"}. Inventory location: ${locationReady ? "ready" : "missing"}.`,
+      `Draft readiness: ${readyCount}/${rows.length} recent drafts ready to publish.`,
+      firstMissing.length ? `Next fixes: ${firstMissing.join(", ")}.` : "Next action: approved ready drafts can be published to sandbox.",
+      lastFailed ? `Last publish error: ${lastFailed.ebay_error_code ?? "ERROR"} ${lastFailed.error_message ?? ""}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n")
+  };
+}
+
+async function syncEbayPoliciesFromTelegram({ supabase, userId }: ActionContext) {
+  try {
+    const result = await syncSellerPolicies({ supabase, userId });
+    const policies = result.policies;
+
+    return {
+      ok: true,
+      message: `Seller policies synced. Payment: ${policies.paymentPolicy?.name ?? "missing"}, return: ${
+        policies.returnPolicy?.name ?? "missing"
+      }, fulfillment: ${policies.fulfillmentPolicy?.name ?? "missing"}.`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Seller policy sync failed."
+    };
+  }
+}
+
+async function setupEbayLocationFromTelegram({ supabase, userId }: ActionContext) {
+  try {
+    const result = await ensureInventoryLocation({ supabase, userId });
+
+    return {
+      ok: true,
+      message: `Inventory location ready: ${result.location.merchantLocationKey}.`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Inventory location setup failed."
+    };
+  }
 }
 
 async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
   const { data, error } = await supabase
     .from("listing_drafts")
-    .select("id")
+    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,quantity,price,optimized_image_urls")
     .eq("user_id", userId)
-    .in("status", ["approved", "draft"])
-    .not("ebay_category_id", "is", null)
+    .eq("status", "approved")
     .limit(quantity);
 
   if (error) {
     throw new Error(error.message);
   }
 
-  if (!data?.length) {
+  const account = await getEbayAccount({ supabase, userId });
+  const rows = (data ?? []) as Array<Record<string, any>>;
+  const readiness = await Promise.all(rows.map((draft) => validateListingReadiness({ draft, account })));
+  const readyDrafts = rows.filter((_, index) => readiness[index]?.ready);
+
+  if (!readyDrafts.length) {
+    const firstMissing = readiness.find((result) => !result.ready)?.missing.slice(0, 5).join(", ");
     return {
       ok: true,
-      message: "No sandbox-ready drafts found. Drafts need approved status, eBay category ID, item specifics, and image URLs."
+      message: firstMissing
+        ? `No sandbox-ready drafts found. First missing items: ${firstMissing}.`
+        : "No approved listing drafts found. Approve drafts and complete readiness checks first."
     };
   }
 
   let published = 0;
   let failed = 0;
 
-  for (const draft of data as Array<{ id: string }>) {
+  for (const draft of readyDrafts as Array<{ id: string }>) {
     try {
       await publishListingDraftToEbaySandbox({ supabase, userId, draftId: draft.id });
       published += 1;
