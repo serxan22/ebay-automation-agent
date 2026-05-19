@@ -405,20 +405,55 @@ async function createListingDrafts({ supabase, userId, quantity }: ActionContext
 
   let draftsCreated = 0;
   let rejected = 0;
+  let approved = 0;
+  const rejectionCounts = new Map<string, number>();
 
   for (const product of products) {
     const supplier = suppliers.find((item) => item.id === product.supplierId) ?? null;
     const analysis = analyzeProduct({ product, settings, supplier });
+    const { data: analysisRow, error: analysisError } = await supabase
+      .from("product_analysis")
+      .insert({
+        user_id: userId,
+        supplier_product_id: product.id,
+        profit_score: analysis.profitScore,
+        risk_score: analysis.riskScore,
+        demand_score: analysis.demandScore,
+        competition_score: analysis.competitionScore,
+        image_score: analysis.imageScore,
+        shipping_score: analysis.shippingScore,
+        final_score: analysis.finalScore,
+        estimated_ebay_fees: analysis.estimatedEbayFees,
+        estimated_total_cost: analysis.estimatedTotalCost,
+        recommended_ebay_price: analysis.recommendedEbayPrice,
+        estimated_profit: analysis.estimatedProfit,
+        margin_percentage: analysis.marginPercentage,
+        ai_notes: analysis.aiNotes,
+        rejection_reasons: analysis.rejectionReasons,
+        approved_for_listing: analysis.approvedForListing
+      })
+      .select("id")
+      .single();
+
+    if (analysisError) {
+      throw new Error(analysisError.message);
+    }
 
     if (!analysis.approvedForListing) {
       rejected += 1;
+      for (const reason of analysis.rejectionReasons) {
+        const groupedReason = groupRejectionReason(reason);
+        rejectionCounts.set(groupedReason, (rejectionCounts.get(groupedReason) ?? 0) + 1);
+      }
       continue;
     }
 
+    approved += 1;
     const generated = await generateListing({ product, analysis });
     const { error } = await supabase.from("listing_drafts").insert({
       user_id: userId,
       supplier_product_id: product.id,
+      analysis_id: analysisRow.id,
       ebay_title: generated.ebayTitle,
       ebay_description: generated.ebayDescription,
       ebay_category_id: null,
@@ -438,9 +473,27 @@ async function createListingDrafts({ supabase, userId, quantity }: ActionContext
     draftsCreated += 1;
   }
 
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "success",
+    module: "listing_drafts",
+    message: "Telegram listing drafts created.",
+    metadata: {
+      productsAnalyzed: products.length,
+      approved,
+      rejected,
+      draftsCreated
+    }
+  });
+
+  const reasons = formatGroupedRejectionReasons(rejectionCounts);
+
   return {
     ok: true,
-    message: `${draftsCreated} listing drafts created, ${rejected} products held back by rules. Drafts still need eBay category IDs before sandbox publish.`
+    message: `${products.length} products analyzed: ${approved} approved, ${rejected} rejected. ${draftsCreated} listing drafts created.${
+      reasons ? `\nReasons:\n${reasons}` : ""
+    }`
   };
 }
 

@@ -1,16 +1,39 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import type { ListingDraftStatus } from "@/lib/types";
 
-export function PublishDraftButton({ draftId, disabled }: { draftId?: string; disabled?: boolean }) {
+export function PublishDraftButton({
+  draftId,
+  status,
+  ebayConnected,
+  disabled
+}: {
+  draftId?: string;
+  status: ListingDraftStatus;
+  ebayConnected: boolean;
+  disabled?: boolean;
+}) {
+  const router = useRouter();
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function publish() {
+    if (status !== "approved") {
+      setMessage("Approve this draft before sandbox publishing.");
+      return;
+    }
+
+    if (!ebayConnected) {
+      setMessage("Connect eBay sandbox first in Settings.");
+      return;
+    }
+
     if (!draftId) {
-      setMessage("This demo draft is not saved in Supabase yet.");
+      setMessage("This draft is not saved in Supabase yet.");
       return;
     }
 
@@ -34,10 +57,21 @@ export function PublishDraftButton({ draftId, disabled }: { draftId?: string; di
       setMessage(
         `Sandbox listing published. Item ${payload.result.listingId}, offer ${payload.result.offerId}, SKU ${payload.result.sku}.`
       );
+      router.refresh();
       return;
     }
 
-    setMessage(`${payload.code ? `${payload.code}: ` : ""}${payload.error ?? "Publish failed."} ${payload.recommendation ?? ""}`);
+    const isDisconnected =
+      payload.code === "TOKEN_EXPIRED" && /not connected|token|connect/i.test(payload.error ?? "");
+
+    setMessage(
+      isDisconnected
+        ? "Connect eBay sandbox first in Settings."
+        : `${payload.code ? `${payload.code}: ` : ""}${payload.error ?? "Publish failed."} ${
+            payload.recommendation ?? ""
+          }`
+    );
+    router.refresh();
   }
 
   return (

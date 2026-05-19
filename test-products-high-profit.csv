@@ -1,0 +1,4 @@
+title,description,supplier_sku,brand,category,supplier_price,shipping_cost,stock_quantity,product_url,image_url_1,shipping_days,country,currency
+Premium Desk Organizer,Modern desk organizer for office and study,SKU-H001,Generic,Home Office,2.00,1.00,80,https://example.com/organizer,https://picsum.photos/950/950,3,US,USD
+Kitchen Drawer Divider,Adjustable drawer divider for kitchen storage,SKU-H002,Generic,Kitchen,2.50,1.00,60,https://example.com/divider,https://picsum.photos/951/951,3,US,USD
+Cable Management Clips,Reusable cable clips for desk and home office,SKU-H003,Generic,Accessories,1.00,0.50,120,https://example.com/clips,https://picsum.photos/952/952,2,US,USD

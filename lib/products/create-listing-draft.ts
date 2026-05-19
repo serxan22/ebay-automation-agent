@@ -12,6 +12,7 @@ export interface CreateListingDraftInput {
   generatedListing: ListingGenerationResult;
   settings: AutomationSettings;
   optimizedImageUrls?: string[];
+  analysisId?: string | null;
 }
 
 export function createListingDraft({
@@ -19,13 +20,14 @@ export function createListingDraft({
   analysis,
   generatedListing,
   settings,
-  optimizedImageUrls
+  optimizedImageUrls,
+  analysisId
 }: CreateListingDraftInput): ListingDraft {
-  const status = analysis.approvedForListing && settings.approvalMode === "manual" ? "draft" : "rejected";
+  const status = analysis.approvedForListing ? "draft" : "rejected";
 
   return {
     supplierProductId: product.id ?? product.supplierSku,
-    analysisId: null,
+    analysisId: analysisId ?? null,
     ebayTitle: generatedListing.ebayTitle,
     ebayDescription: generatedListing.ebayDescription,
     ebayCategoryId: null,

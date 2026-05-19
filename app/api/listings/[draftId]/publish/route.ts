@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { logAutomationEvent } from "@/lib/automation/logging";
 import { normalizePublishError, publishListingDraftToEbaySandbox } from "@/lib/ebay/publish";
 import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 
@@ -22,6 +23,37 @@ export async function POST(_request: Request, { params }: { params: { draftId: s
 
     if (!user) {
       return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+    }
+
+    const { data: draft, error: draftError } = await supabase
+      .from("listing_drafts")
+      .select("id,status")
+      .eq("id", parsedParams.draftId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (draftError) {
+      throw new Error(draftError.message);
+    }
+
+    if (!draft) {
+      return NextResponse.json({ error: "Listing draft was not found." }, { status: 404 });
+    }
+
+    if (draft.status !== "approved") {
+      await logAutomationEvent({
+        supabase,
+        userId: user.id,
+        level: "warning",
+        module: "ebay_publish",
+        message: "Sandbox publish blocked because draft is not approved.",
+        metadata: { draftId: parsedParams.draftId, status: draft.status }
+      });
+
+      return NextResponse.json(
+        { ok: false, error: "Approve this draft before sandbox publishing.", code: "DRAFT_NOT_APPROVED" },
+        { status: 400 }
+      );
     }
 
     const result = await publishListingDraftToEbaySandbox({
