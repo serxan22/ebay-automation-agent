@@ -52,8 +52,10 @@ export default async function SettingsPage({
         <h2 className="font-semibold">eBay OAuth callback diagnostic</h2>
         <p className="mt-2">
           If eBay shows &quot;Authorization successfully completed. safe to close&quot; and the app remains disconnected,
-          eBay did not call the callback URL. Create a new RuName in eBay Developer and make sure Auth accepted URL
-          is exactly https://ebay-automation-agent.vercel.app/api/ebay/oauth/callback.
+          eBay did not call the callback URL. Use clean eBay Developer URLs: Privacy Policy URL
+          https://ebay-automation-agent.vercel.app/privacy, Auth accepted URL
+          https://ebay-automation-agent.vercel.app/ebay/callback, and Auth declined URL
+          https://ebay-automation-agent.vercel.app/ebay/declined.
         </p>
         <Link
           href="/dashboard/settings/ebay-debug"

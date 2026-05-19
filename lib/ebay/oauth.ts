@@ -59,6 +59,8 @@ export function getEbayOAuthDebugInfo() {
     hasRuname: Boolean(runtime.runame),
     runame: runtime.runame ?? null,
     redirectUriFromEnv: runtime.redirectUri ?? null,
+    expectedCallbackUrl: getExpectedEbayCallbackUrl(),
+    cleanCallbackRecommended: true,
     redirectUriActuallyUsed: runtime.oauthRedirectUri ?? null,
     redirectUriMode: runtime.redirectUriMode,
     scopes: getEbayOAuthScopes(),
@@ -68,7 +70,7 @@ export function getEbayOAuthDebugInfo() {
 
 export function getExpectedEbayCallbackUrl() {
   const runtime = getEbayOAuthRuntimeInfo();
-  return runtime.redirectUri ?? `${getAppUrl()}/api/ebay/oauth/callback`;
+  return runtime.redirectUri ?? `${getAppUrl()}/ebay/callback`;
 }
 
 export function sanitizeOAuthUrlForLogs(value: string) {

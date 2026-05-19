@@ -21,6 +21,8 @@ interface EbayOAuthDebugPanelProps {
     hasRuname: boolean;
     runame: string | null;
     redirectUriFromEnv: string | null;
+    expectedCallbackUrl?: string;
+    cleanCallbackRecommended?: boolean;
     redirectUriActuallyUsed: string | null;
     redirectUriMode: "runame" | "url";
     scopes: string[];
@@ -83,7 +85,7 @@ export function EbayOAuthDebugPanel({ debug, manual, error }: EbayOAuthDebugPane
       <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
         If eBay shows &quot;Authorization successfully completed. It&apos;s now safe to close the browser window/tab&quot; and the
         app remains disconnected, eBay did not call the callback URL. Create a new RuName in eBay Developer and make
-        sure Auth accepted URL is exactly {manualUrl?.expectedCallbackUrl ?? debug.redirectUriFromEnv}.
+        sure Auth accepted URL is exactly {manualUrl?.expectedCallbackUrl ?? debug.expectedCallbackUrl ?? debug.redirectUriFromEnv}.
       </section>
 
       <section className="rounded-lg border border-ink-200 bg-white p-5 dark:border-white/10 dark:bg-white/[0.04]">
@@ -111,7 +113,7 @@ export function EbayOAuthDebugPanel({ debug, manual, error }: EbayOAuthDebugPane
           <DebugItem label="State ID" value={manualUrl?.stateId ?? "Unavailable"} />
           <DebugItem label="State value" value={manualUrl?.state ?? "Unavailable"} />
           <DebugItem label="Runame" value={manualUrl?.runame ?? debug.runame ?? "Missing"} />
-          <DebugItem label="Expected callback URL" value={manualUrl?.expectedCallbackUrl ?? debug.redirectUriFromEnv ?? "Missing"} />
+          <DebugItem label="Expected callback URL" value={manualUrl?.expectedCallbackUrl ?? debug.expectedCallbackUrl ?? debug.redirectUriFromEnv ?? "Missing"} />
         </div>
 
         <div className="mt-4">
@@ -138,6 +140,7 @@ export function EbayOAuthDebugPanel({ debug, manual, error }: EbayOAuthDebugPane
           <DebugItem label="Has RuName" value={String(debug.hasRuname)} />
           <DebugItem label="RuName" value={debug.runame ?? "Missing"} />
           <DebugItem label="Redirect URI from env" value={debug.redirectUriFromEnv ?? "Missing"} />
+          <DebugItem label="Clean callback recommended" value={String(Boolean(debug.cleanCallbackRecommended))} />
           <DebugItem label="Redirect URI actually used" value={debug.redirectUriActuallyUsed ?? "Missing"} />
           <DebugItem label="Redirect URI mode" value={debug.redirectUriMode} />
         </div>
