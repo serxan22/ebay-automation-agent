@@ -33,7 +33,8 @@ const updateDraftSchema = z.discriminatedUnion("action", [
     price: z.number().min(0),
     quantity: z.number().int().min(1),
     ebayCategoryId: z.string().trim().nullable().optional(),
-    itemSpecifics: z.record(itemSpecificValueSchema).default({})
+    itemSpecifics: z.record(itemSpecificValueSchema).default({}),
+    optimizedImageUrls: z.array(z.string().trim().min(1)).default([])
   })
 ]);
 
@@ -201,6 +202,7 @@ export async function PATCH(request: Request) {
         quantity: payload.quantity,
         ebay_category_id: payload.ebayCategoryId || null,
         item_specifics: payload.itemSpecifics,
+        optimized_image_urls: payload.optimizedImageUrls,
         status: "draft",
         error_message: null,
         ebay_error_code: null,
@@ -233,7 +235,8 @@ export async function PATCH(request: Request) {
         draftId: payload.draftId,
         ebayCategoryId: payload.ebayCategoryId,
         price: payload.price,
-        quantity: payload.quantity
+        quantity: payload.quantity,
+        imageCount: payload.optimizedImageUrls.length
       }
     });
 

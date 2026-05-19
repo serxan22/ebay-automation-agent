@@ -132,6 +132,21 @@ export async function executeTelegramIntentAction({
         quantity: getNumber(intent.parameters.quantity) ?? 5,
         source: intent.parameters.draft_source ?? "latest_products"
       });
+    case "SHOW_LISTING_DRAFTS":
+      return showListingDrafts({
+        supabase,
+        userId,
+        status: getString(intent.parameters.draft_status),
+        quantity: getNumber(intent.parameters.quantity) ?? 5
+      });
+    case "APPROVE_DRAFTS":
+      return approveListingDrafts({
+        supabase,
+        userId,
+        quantity: getNumber(intent.parameters.quantity) ?? 5
+      });
+    case "REVISE_DRAFT_HELP":
+      return reviseDraftHelp();
     case "PUBLISH_SAFE_DRAFTS_SANDBOX":
       return publishSafeDraftsSandbox({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 5 });
     case "SHOW_FAILED_TASKS":
@@ -783,6 +798,162 @@ async function logDraftCreationFailed({
       analysisId: candidate.analysisId
     }
   });
+}
+
+async function showListingDrafts({
+  supabase,
+  userId,
+  status,
+  quantity
+}: ActionContext & {
+  status?: string;
+  quantity: number;
+}) {
+  const limit = Math.min(Math.max(quantity, 1), 5);
+  let query = supabase
+    .from("listing_drafts")
+    .select("id,ebay_title,price,status,updated_at")
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (status && ["draft", "approved", "published", "failed"].includes(status)) {
+    query = query.eq("status", status);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw new Error(describeSupabaseError(error));
+  }
+
+  const rows = (data ?? []) as Array<{
+    id: string;
+    ebay_title: string;
+    price: number | string;
+    status: string;
+  }>;
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "listing_drafts",
+    message: "listing_drafts_listed",
+    metadata: {
+      status: status ?? "all",
+      count: rows.length
+    }
+  });
+
+  if (!rows.length) {
+    return {
+      ok: true,
+      message: status
+        ? `No ${status} listing drafts found. Analyze products and create drafts first.`
+        : "No listing drafts found. Analyze products and create drafts first."
+    };
+  }
+
+  return {
+    ok: true,
+    message: rows
+      .map((draft, index) => {
+        const price = Number(draft.price ?? 0);
+        return `${index + 1}. ${draft.ebay_title} - $${price.toFixed(2)} - ${draft.status}`;
+      })
+      .join("\n")
+  };
+}
+
+async function approveListingDrafts({
+  supabase,
+  userId,
+  quantity
+}: ActionContext & {
+  quantity: number;
+}) {
+  const limit = Math.min(Math.max(quantity, 1), 25);
+  const { data, error } = await supabase
+    .from("listing_drafts")
+    .select("id,ebay_title")
+    .eq("user_id", userId)
+    .eq("status", "draft")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(describeSupabaseError(error));
+  }
+
+  const rows = (data ?? []) as Array<{ id: string; ebay_title: string }>;
+
+  if (!rows.length) {
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "info",
+      module: "listing_drafts",
+      message: "listing_drafts_approve_skipped",
+      metadata: { reason: "no_draft_rows" }
+    });
+
+    return { ok: true, message: "No draft listing rows found to approve." };
+  }
+
+  const ids = rows.map((draft) => draft.id);
+  const { data: updatedRows, error: updateError } = await supabase
+    .from("listing_drafts")
+    .update({
+      status: "approved",
+      error_message: null,
+      ebay_error_code: null,
+      ebay_error_json: {}
+    })
+    .eq("user_id", userId)
+    .in("id", ids)
+    .select("id,ebay_title,status");
+
+  if (updateError) {
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "error",
+      module: "listing_drafts",
+      message: "listing_drafts_approve_failed",
+      metadata: {
+        reason: describeSupabaseError(updateError),
+        draftIds: ids
+      }
+    });
+
+    throw new Error(describeSupabaseError(updateError));
+  }
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "success",
+    module: "listing_drafts",
+    message: "listing_drafts_approved_from_telegram",
+    metadata: {
+      count: updatedRows?.length ?? 0,
+      draftIds: ids
+    }
+  });
+
+  return {
+    ok: true,
+    message: `${updatedRows?.length ?? 0} listing drafts approved. No eBay publish action was run.`
+  };
+}
+
+function reviseDraftHelp(): AgentTaskResult {
+  return {
+    ok: true,
+    message:
+      "Draft revision hazırdır: dashboardda /dashboard/listings səhifəsinə gir, draft kartında Revise seç və eBay title, description, price, quantity, category ID, item specifics JSON və image URL-ləri dəyiş. Telegram approve edə bilər, amma revise üçün UI modal daha təhlükəsizdir."
+  };
 }
 
 async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionContext & { quantity: number }) {

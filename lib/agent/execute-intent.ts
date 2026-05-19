@@ -33,6 +33,8 @@ export async function executeTelegramIntent({
     case "SHOW_STATUS":
     case "SHOW_DAILY_REPORT":
     case "SHOW_FAILED_TASKS":
+    case "SHOW_LISTING_DRAFTS":
+    case "REVISE_DRAFT_HELP":
       return {
         ok: true,
         message: "Dashboard reporting is available. Use the Telegram webhook flow for live account-scoped execution."
@@ -44,6 +46,7 @@ export async function executeTelegramIntent({
     case "CHANGE_MIN_PROFIT":
     case "CHANGE_RISK_TOLERANCE":
     case "ENABLE_TEST_MODE":
+    case "APPROVE_DRAFTS":
     case "UPDATE_BLOCKED_CATEGORY":
     case "UPDATE_BLOCKED_BRAND":
     case "CHANGE_APPROVAL_MODE":

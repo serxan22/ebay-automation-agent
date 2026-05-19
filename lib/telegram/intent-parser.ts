@@ -16,6 +16,9 @@ export const TelegramIntentNameSchema = z.enum([
   "FIND_PRODUCTS",
   "ANALYZE_PRODUCTS",
   "CREATE_LISTING_DRAFTS",
+  "SHOW_LISTING_DRAFTS",
+  "APPROVE_DRAFTS",
+  "REVISE_DRAFT_HELP",
   "PUBLISH_SAFE_DRAFTS_SANDBOX",
   "SHOW_FAILED_TASKS",
   "UPDATE_BLOCKED_CATEGORY",
@@ -61,6 +64,7 @@ export const TelegramIntentParametersSchema = z
     timeframe: z.enum(["today", "tomorrow", "daily", "weekly"]).nullable().default(null),
     publish_mode: z.enum(["sandbox_only"]).nullable().default(null),
     draft_source: z.enum(["latest_products", "approved_products"]).nullable().default(null),
+    draft_status: z.enum(["draft", "approved", "published", "failed"]).nullable().default(null),
     user_question: NullableStringSchema.default(null)
   })
   .strict()
@@ -76,6 +80,7 @@ export const TelegramIntentParametersSchema = z
     timeframe: null,
     publish_mode: null,
     draft_source: null,
+    draft_status: null,
     user_question: null
   });
 
@@ -392,6 +397,30 @@ export function parseTelegramIntentHeuristically(
     });
   }
 
+  if (isShowListingDraftsRequest(text)) {
+    return makeIntent("SHOW_LISTING_DRAFTS", language, {
+      parameters: { ...parameters, draft_status: extractDraftStatus(text), user_question: message },
+      confidence: 0.86,
+      safe_response: "Listing draftlarını yoxlayıram."
+    });
+  }
+
+  if (isApproveDraftsRequest(text)) {
+    return makeIntent("APPROVE_DRAFTS", language, {
+      parameters: { ...parameters, draft_status: "draft", user_question: message },
+      confidence: 0.86,
+      safe_response: "Draftları approve edəcəm, eBay publish etməyəcəm."
+    });
+  }
+
+  if (isReviseDraftHelpRequest(text)) {
+    return makeIntent("REVISE_DRAFT_HELP", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.82,
+      safe_response: "Draft revision üçün hansı sahələri dəyişə biləcəyini izah edirəm."
+    });
+  }
+
   if (/(sandbox|test|draft|listing|list|publish|yerlesdir|yerləşdir|qoy|ebay)/.test(text) && /(publish|list|yerlesdir|yerləşdir|qoy|yayınla)/.test(text)) {
     return makeIntent("PUBLISH_SAFE_DRAFTS_SANDBOX", language, {
       parameters: { ...parameters, publish_mode: "sandbox_only" },
@@ -507,6 +536,38 @@ export function parseDeterministicControlIntent(
     });
   }
 
+  if (isShowListingDraftsRequest(text)) {
+    return makeIntent("SHOW_LISTING_DRAFTS", language, {
+      parameters: {
+        quantity: extractQuantity(text) ?? null,
+        draft_status: extractDraftStatus(text),
+        user_question: message
+      },
+      confidence: 0.92,
+      safe_response: "Listing draftlarını yoxlayıram."
+    });
+  }
+
+  if (isApproveDraftsRequest(text)) {
+    return makeIntent("APPROVE_DRAFTS", language, {
+      parameters: {
+        quantity: extractQuantity(text) ?? null,
+        draft_status: "draft",
+        user_question: message
+      },
+      confidence: 0.9,
+      safe_response: "Draftları approve edəcəm, eBay publish etməyəcəm."
+    });
+  }
+
+  if (isReviseDraftHelpRequest(text)) {
+    return makeIntent("REVISE_DRAFT_HELP", language, {
+      parameters: { user_question: message },
+      confidence: 0.88,
+      safe_response: "Draft revision üçün kömək göstərəcəm."
+    });
+  }
+
   if (isApprovedDraftRequest(text)) {
     return makeIntent("CREATE_LISTING_DRAFTS", language, {
       parameters: { quantity: extractQuantity(text) ?? null, draft_source: "approved_products", user_question: message },
@@ -561,7 +622,11 @@ export const telegramIntentExamples: Array<{ message: string; expectedIntent: Te
   { message: "test mode aktiv et", expectedIntent: "ENABLE_TEST_MODE" },
   { message: "3 məhsul analiz et və draft yarat", expectedIntent: "CREATE_LISTING_DRAFTS" },
   { message: "son 3 approved məhsuldan listing draft yarat", expectedIntent: "CREATE_LISTING_DRAFTS" },
-  { message: "create drafts from approved products", expectedIntent: "CREATE_LISTING_DRAFTS" }
+  { message: "create drafts from approved products", expectedIntent: "CREATE_LISTING_DRAFTS" },
+  { message: "draftlarımı göstər", expectedIntent: "SHOW_LISTING_DRAFTS" },
+  { message: "listing draftlarım var?", expectedIntent: "SHOW_LISTING_DRAFTS" },
+  { message: "approved draftları göstər", expectedIntent: "SHOW_LISTING_DRAFTS" },
+  { message: "safe draftları approve et", expectedIntent: "APPROVE_DRAFTS" }
 ];
 
 export function runTelegramIntentExamples() {
@@ -672,6 +737,7 @@ function normalizeParameters(parameters?: Partial<TelegramIntent["parameters"]> 
     timeframe: raw.timeframe ?? null,
     publish_mode: raw.publish_mode ?? null,
     draft_source: raw.draft_source ?? null,
+    draft_status: raw.draft_status ?? raw.status ?? null,
     user_question: raw.user_question ?? null
   });
 }
@@ -689,6 +755,7 @@ function defaultIntentParameters(): z.infer<typeof TelegramIntentParametersSchem
     timeframe: null,
     publish_mode: null,
     draft_source: null,
+    draft_status: null,
     user_question: null
   };
 }
@@ -847,6 +914,41 @@ function isTestModeRequest(text: string) {
 
 function isApprovedDraftRequest(text: string) {
   return /(approved|təsdiq|tesdiq|uygun|uyğun)/.test(text) && isCreateDraftRequest(text);
+}
+
+function isShowListingDraftsRequest(text: string) {
+  return /(draft|draftlar|draftlari|draftları|listing draft|qaralama|taslak)/.test(text) &&
+    /(goster|göstər|show|var|list|siyahi|siyahı|hansi|hansı)/.test(text);
+}
+
+function isApproveDraftsRequest(text: string) {
+  return /(draft|draftlar|draftlari|draftları|listing draft|qaralama|taslak)/.test(text) &&
+    /(approve|approved et|tesdiq|təsdiq|qebul|qəbul)/.test(text);
+}
+
+function isReviseDraftHelpRequest(text: string) {
+  return /(draft|draftlar|draftlari|draftları|listing draft|qaralama|taslak)/.test(text) &&
+    /(revise|revision|duzelt|düzəlt|edit|deyis|dəyiş|redakte|nece|necə|help|kom[eə]k)/.test(text);
+}
+
+function extractDraftStatus(text: string) {
+  if (/(approved|tesdiq|təsdiq)/.test(text)) {
+    return "approved" as const;
+  }
+
+  if (/(published|publish olun|list olun|yayınlan)/.test(text)) {
+    return "published" as const;
+  }
+
+  if (/(failed|fail|xeta|xəta|hata)/.test(text)) {
+    return "failed" as const;
+  }
+
+  if (/\bdraft\b|qaralama|taslak/.test(text)) {
+    return "draft" as const;
+  }
+
+  return null;
 }
 
 function isCreateDraftRequest(text: string) {

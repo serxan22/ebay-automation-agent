@@ -82,6 +82,9 @@ export function buildTelegramReply(intent: TelegramIntent, result: AgentTaskResu
     intent.intent === "CHANGE_RISK_TOLERANCE" ||
     intent.intent === "ENABLE_TEST_MODE" ||
     intent.intent === "CREATE_LISTING_DRAFTS" ||
+    intent.intent === "SHOW_LISTING_DRAFTS" ||
+    intent.intent === "APPROVE_DRAFTS" ||
+    intent.intent === "REVISE_DRAFT_HELP" ||
     intent.intent === "UPDATE_BLOCKED_CATEGORY" ||
     intent.intent === "UPDATE_BLOCKED_BRAND" ||
     intent.intent === "CHANGE_APPROVAL_MODE" ||

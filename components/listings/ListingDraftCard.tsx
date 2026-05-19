@@ -9,6 +9,11 @@ import { Button } from "@/components/ui/Button";
 import type { ListingDraft } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils/format";
 
+type Feedback = {
+  text: string;
+  tone: "success" | "error" | "info";
+};
+
 export function ListingDraftCard({
   draft,
   ebayConnected
@@ -17,7 +22,7 @@ export function ListingDraftCard({
   ebayConnected: boolean;
 }) {
   const router = useRouter();
-  const [message, setMessage] = useState("");
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [loading, setLoading] = useState(false);
   const [revising, setRevising] = useState(false);
   const [form, setForm] = useState(() => ({
@@ -26,19 +31,25 @@ export function ListingDraftCard({
     price: String(draft.price),
     quantity: String(draft.quantity),
     ebayCategoryId: draft.ebayCategoryId ?? "",
-    itemSpecifics: JSON.stringify(draft.itemSpecifics ?? {}, null, 2)
+    itemSpecifics: JSON.stringify(draft.itemSpecifics ?? {}, null, 2),
+    optimizedImageUrls: (draft.optimizedImageUrls ?? []).join("\n")
   }));
   const tone = getStatusTone(draft.status);
   const canApprove = draft.status === "draft";
+  const hasAnalysisContext =
+    draft.estimatedProfit != null ||
+    draft.marginPercentage != null ||
+    draft.riskScore != null ||
+    draft.finalScore != null;
 
   async function approveDraft() {
     if (!draft.id) {
-      setMessage("This draft is not saved in Supabase yet.");
+      setFeedback({ text: "This draft is not saved in Supabase yet.", tone: "error" });
       return;
     }
 
     setLoading(true);
-    setMessage("");
+    setFeedback(null);
 
     const response = await fetch("/api/listings/drafts", {
       method: "PATCH",
@@ -48,7 +59,10 @@ export function ListingDraftCard({
     const payload = (await response.json()) as { ok?: boolean; error?: string; message?: string };
 
     setLoading(false);
-    setMessage(payload.ok ? payload.message ?? "Draft approved." : payload.error ?? "Approve failed.");
+    setFeedback({
+      text: payload.ok ? payload.message ?? "Draft approved." : payload.error ?? "Approve failed.",
+      tone: payload.ok ? "success" : "error"
+    });
 
     if (payload.ok) {
       router.refresh();
@@ -57,7 +71,7 @@ export function ListingDraftCard({
 
   async function saveRevision() {
     if (!draft.id) {
-      setMessage("This draft is not saved in Supabase yet.");
+      setFeedback({ text: "This draft is not saved in Supabase yet.", tone: "error" });
       return;
     }
 
@@ -66,12 +80,17 @@ export function ListingDraftCard({
     try {
       itemSpecifics = JSON.parse(form.itemSpecifics) as Record<string, string | string[]>;
     } catch {
-      setMessage("Item specifics must be valid JSON.");
+      setFeedback({ text: "Item specifics must be valid JSON.", tone: "error" });
       return;
     }
 
+    const optimizedImageUrls = form.optimizedImageUrls
+      .split(/\n|,/)
+      .map((url) => url.trim())
+      .filter(Boolean);
+
     setLoading(true);
-    setMessage("");
+    setFeedback(null);
 
     const response = await fetch("/api/listings/drafts", {
       method: "PATCH",
@@ -84,13 +103,17 @@ export function ListingDraftCard({
         price: Number(form.price),
         quantity: Number(form.quantity),
         ebayCategoryId: form.ebayCategoryId || null,
-        itemSpecifics
+        itemSpecifics,
+        optimizedImageUrls
       })
     });
     const payload = (await response.json()) as { ok?: boolean; error?: string; message?: string };
 
     setLoading(false);
-    setMessage(payload.ok ? payload.message ?? "Draft revised." : payload.error ?? "Save failed.");
+    setFeedback({
+      text: payload.ok ? payload.message ?? "Draft revised." : payload.error ?? "Save failed.",
+      tone: payload.ok ? "success" : "error"
+    });
 
     if (payload.ok) {
       setRevising(false);
@@ -111,15 +134,61 @@ export function ListingDraftCard({
             <FileText size={18} />
           </div>
           <div>
-            <h3 className="font-semibold text-ink-950 dark:text-white">{draft.ebayTitle}</h3>
-            <p className="mt-1 text-sm text-ink-500 dark:text-ink-400">
-              {formatCurrency(draft.price)} - Qty {draft.quantity} - {draft.condition}
+            <p className="text-xs font-medium uppercase text-ink-400 dark:text-ink-500">
+              Supplier product
             </p>
+            <h3 className="mt-1 font-semibold text-ink-950 dark:text-white">
+              {draft.supplierProductTitle ?? draft.ebayTitle}
+            </h3>
+            <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">
+              SKU {draft.supplierSku ?? "not set"}
+            </p>
+            <div className="mt-3 border-l-2 border-mint-400 pl-3">
+              <p className="text-xs font-medium uppercase text-ink-400 dark:text-ink-500">eBay title</p>
+              <p className="mt-1 text-sm font-semibold text-ink-900 dark:text-white">{draft.ebayTitle}</p>
+            </div>
             <p className="mt-2 max-w-xl text-sm text-ink-500 dark:text-ink-400">{descriptionPreview}</p>
           </div>
         </div>
         <StatusBadge status={draft.status} tone={tone} />
       </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Metric label="Price" value={formatCurrency(draft.price)} />
+        <Metric label="Quantity" value={String(draft.quantity)} />
+        <Metric
+          label="Estimated profit"
+          value={draft.estimatedProfit == null ? "Not analyzed" : formatCurrency(draft.estimatedProfit)}
+        />
+        <Metric
+          label="Margin"
+          value={draft.marginPercentage == null ? "Not analyzed" : `${draft.marginPercentage.toFixed(1)}%`}
+        />
+      </div>
+
+      {hasAnalysisContext ? (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <Metric label="Risk score" value={draft.riskScore == null ? "Not analyzed" : `${draft.riskScore}/100`} />
+          <Metric label="Final score" value={draft.finalScore == null ? "Not analyzed" : `${draft.finalScore}/100`} />
+        </div>
+      ) : null}
+
+      {draft.analysisNotes ? (
+        <div className="mt-4 rounded-md border border-mint-200 bg-mint-50 p-3 text-sm text-mint-900 dark:border-mint-500/20 dark:bg-mint-500/10 dark:text-mint-100">
+          <span className="font-medium">Analysis notes:</span> {draft.analysisNotes}
+        </div>
+      ) : null}
+
+      {draft.rejectionReasons?.length ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
+          <p className="font-medium">Rejection / analysis flags</p>
+          <ul className="mt-2 list-inside list-disc space-y-1">
+            {draft.rejectionReasons.slice(0, 4).map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap gap-2">
         <Button variant="secondary" onClick={approveDraft} disabled={!canApprove || loading}>
@@ -136,9 +205,9 @@ export function ListingDraftCard({
         />
       </div>
 
-      {message ? (
-        <div className="mt-4 rounded-md border border-ink-200 bg-ink-50 p-3 text-sm text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200">
-          {message}
+      {feedback ? (
+        <div className={getFeedbackClassName(feedback.tone)}>
+          {feedback.text}
         </div>
       ) : null}
 
@@ -226,6 +295,17 @@ export function ListingDraftCard({
                   className="mt-2 w-full rounded-md border border-ink-200 bg-white px-3 py-2 font-mono text-sm text-ink-900 outline-none focus:border-mint-500 dark:border-white/10 dark:bg-ink-950 dark:text-white"
                 />
               </label>
+
+              <label className="text-sm font-medium text-ink-700 dark:text-ink-200">
+                Optimized image URLs
+                <textarea
+                  value={form.optimizedImageUrls}
+                  onChange={(event) => setForm((current) => ({ ...current, optimizedImageUrls: event.target.value }))}
+                  rows={4}
+                  placeholder="One image URL per line"
+                  className="mt-2 w-full rounded-md border border-ink-200 bg-white px-3 py-2 font-mono text-sm text-ink-900 outline-none focus:border-mint-500 dark:border-white/10 dark:bg-ink-950 dark:text-white"
+                />
+              </label>
             </div>
 
             <div className="mt-5 flex flex-wrap justify-end gap-2">
@@ -253,6 +333,29 @@ function getStatusTone(status: ListingDraft["status"]) {
   }
 
   return "warning" as const;
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase text-ink-400 dark:text-ink-500">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-ink-950 dark:text-white">{value}</p>
+    </div>
+  );
+}
+
+function getFeedbackClassName(tone: Feedback["tone"]) {
+  const base = "mt-4 rounded-md border p-3 text-sm";
+
+  if (tone === "success") {
+    return `${base} border-mint-200 bg-mint-50 text-mint-900 dark:border-mint-500/20 dark:bg-mint-500/10 dark:text-mint-100`;
+  }
+
+  if (tone === "error") {
+    return `${base} border-coral-200 bg-coral-50 text-coral-800 dark:border-coral-500/20 dark:bg-coral-500/10 dark:text-coral-200`;
+  }
+
+  return `${base} border-ink-200 bg-ink-50 text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200`;
 }
 
 function stripHtml(value: string) {

@@ -89,7 +89,7 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
     supabase
       .from("listing_drafts")
       .select(
-        "id,user_id,supplier_product_id,analysis_id,ebay_title,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,status,ai_generated,error_message,ebay_error_code,ebay_offer_id,ebay_item_id,ebay_sku,publish_attempts,last_publish_attempt_at"
+        "id,user_id,supplier_product_id,analysis_id,ebay_title,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,status,ai_generated,error_message,ebay_error_code,ebay_offer_id,ebay_item_id,ebay_sku,publish_attempts,last_publish_attempt_at,supplier_products(title,supplier_sku),product_analysis(estimated_profit,margin_percentage,risk_score,final_score,ai_notes,rejection_reasons)"
       )
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
@@ -106,32 +106,54 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
     throw new Error(draftsResponse.error.message);
   }
 
-  const drafts = (draftsResponse.data ?? []).map((draft) => ({
-    id: draft.id as string,
-    userId: draft.user_id as string,
-    supplierProductId: draft.supplier_product_id as string,
-    analysisId: draft.analysis_id as string | null,
-    ebayTitle: draft.ebay_title as string,
-    ebayDescription: draft.ebay_description as string,
-    ebayCategoryId: draft.ebay_category_id as string | null,
-    itemSpecifics: (draft.item_specifics ?? {}) as Record<string, string>,
-    condition: draft.condition as string,
-    quantity: Number(draft.quantity),
-    price: Number(draft.price),
-    optimizedImageUrls: (draft.optimized_image_urls ?? []) as string[],
-    status: draft.status as ListingDraft["status"],
-    aiGenerated: Boolean(draft.ai_generated),
-    errorMessage: draft.error_message as string | null,
-    ebayErrorCode: draft.ebay_error_code as string | null,
-    ebayOfferId: draft.ebay_offer_id as string | null,
-    ebayItemId: draft.ebay_item_id as string | null,
-    ebaySku: draft.ebay_sku as string | null,
-    publishAttempts: Number(draft.publish_attempts ?? 0),
-    lastPublishAttemptAt: draft.last_publish_attempt_at as string | null
-  }));
+  const drafts = (draftsResponse.data ?? []).map((draft) => {
+    const row = draft as Record<string, any>;
+    const supplierProduct = getEmbeddedRow(row.supplier_products);
+    const analysis = getEmbeddedRow(row.product_analysis);
+
+    return {
+      id: row.id as string,
+      userId: row.user_id as string,
+      supplierProductId: row.supplier_product_id as string,
+      analysisId: row.analysis_id as string | null,
+      supplierProductTitle: supplierProduct?.title ?? null,
+      supplierSku: supplierProduct?.supplier_sku ?? null,
+      ebayTitle: row.ebay_title as string,
+      ebayDescription: row.ebay_description as string,
+      ebayCategoryId: row.ebay_category_id as string | null,
+      itemSpecifics: (row.item_specifics ?? {}) as Record<string, string | string[]>,
+      condition: row.condition as string,
+      quantity: Number(row.quantity),
+      price: Number(row.price),
+      optimizedImageUrls: (row.optimized_image_urls ?? []) as string[],
+      status: row.status as ListingDraft["status"],
+      aiGenerated: Boolean(row.ai_generated),
+      estimatedProfit: analysis?.estimated_profit == null ? null : Number(analysis.estimated_profit),
+      marginPercentage: analysis?.margin_percentage == null ? null : Number(analysis.margin_percentage),
+      riskScore: analysis?.risk_score == null ? null : Number(analysis.risk_score),
+      finalScore: analysis?.final_score == null ? null : Number(analysis.final_score),
+      analysisNotes: analysis?.ai_notes ?? null,
+      rejectionReasons: Array.isArray(analysis?.rejection_reasons) ? analysis.rejection_reasons : [],
+      errorMessage: row.error_message as string | null,
+      ebayErrorCode: row.ebay_error_code as string | null,
+      ebayOfferId: row.ebay_offer_id as string | null,
+      ebayItemId: row.ebay_item_id as string | null,
+      ebaySku: row.ebay_sku as string | null,
+      publishAttempts: Number(row.publish_attempts ?? 0),
+      lastPublishAttemptAt: row.last_publish_attempt_at as string | null
+    };
+  });
 
   return {
     drafts,
     ebayConnected: ebayResponse.data?.status === "connected"
   };
+}
+
+function getEmbeddedRow(value: unknown): Record<string, any> | null {
+  if (Array.isArray(value)) {
+    return (value[0] as Record<string, any> | undefined) ?? null;
+  }
+
+  return value && typeof value === "object" ? (value as Record<string, any>) : null;
 }

@@ -8,7 +8,7 @@ Return only one valid JSON object. Do not use markdown, explanations, or code fe
 
 Allowed JSON shape:
 {
-  "intent": "RESUME_AUTOMATION" | "PAUSE_AUTOMATION" | "SHOW_STATUS" | "SHOW_DAILY_REPORT" | "CHANGE_DAILY_LIMIT" | "CHANGE_MIN_MARGIN" | "CHANGE_MIN_PROFIT" | "CHANGE_RISK_TOLERANCE" | "ENABLE_TEST_MODE" | "FIND_PRODUCTS" | "ANALYZE_PRODUCTS" | "CREATE_LISTING_DRAFTS" | "PUBLISH_SAFE_DRAFTS_SANDBOX" | "SHOW_FAILED_TASKS" | "UPDATE_BLOCKED_CATEGORY" | "UPDATE_BLOCKED_BRAND" | "CHANGE_APPROVAL_MODE" | "EXPLAIN_SYSTEM" | "ASK_CLARIFICATION" | "UNKNOWN",
+  "intent": "RESUME_AUTOMATION" | "PAUSE_AUTOMATION" | "SHOW_STATUS" | "SHOW_DAILY_REPORT" | "CHANGE_DAILY_LIMIT" | "CHANGE_MIN_MARGIN" | "CHANGE_MIN_PROFIT" | "CHANGE_RISK_TOLERANCE" | "ENABLE_TEST_MODE" | "FIND_PRODUCTS" | "ANALYZE_PRODUCTS" | "CREATE_LISTING_DRAFTS" | "SHOW_LISTING_DRAFTS" | "APPROVE_DRAFTS" | "REVISE_DRAFT_HELP" | "PUBLISH_SAFE_DRAFTS_SANDBOX" | "SHOW_FAILED_TASKS" | "UPDATE_BLOCKED_CATEGORY" | "UPDATE_BLOCKED_BRAND" | "CHANGE_APPROVAL_MODE" | "EXPLAIN_SYSTEM" | "ASK_CLARIFICATION" | "UNKNOWN",
   "confidence": number,
   "language": "az" | "tr" | "en" | "mixed",
   "parameters": {
@@ -23,6 +23,7 @@ Allowed JSON shape:
     "timeframe": "today" | "tomorrow" | "daily" | "weekly" | null,
     "publish_mode": "sandbox_only" | null,
     "draft_source": "latest_products" | "approved_products" | null,
+    "draft_status": "draft" | "approved" | "published" | "failed" | null,
     "user_question": string | null
   },
   "should_execute": boolean,
@@ -47,6 +48,10 @@ Classification rules:
 - If the message mentions both analysis and draft creation, e.g. "3 məhsul analiz et və draft yarat" or "analyze and create draft", use CREATE_LISTING_DRAFTS with draft_source "latest_products".
 - Create/build/generate drafts => CREATE_LISTING_DRAFTS.
 - "son 3 approved məhsuldan listing draft yarat", "approved məhsullardan draft yarat", "create drafts from approved products" => CREATE_LISTING_DRAFTS with draft_source "approved_products".
+- "draftlarımı göstər", "listing draftlarım var?", "show my drafts" => SHOW_LISTING_DRAFTS.
+- "approved draftları göstər", "show approved drafts" => SHOW_LISTING_DRAFTS with draft_status "approved".
+- "safe draftları approve et", "approve draftlarımı", "approve safe drafts" => APPROVE_DRAFTS. This approves draft rows only; it does not publish to eBay.
+- "draftı necə revise edim?", "revise draft help", "draft edit kömək" => REVISE_DRAFT_HELP.
 - Publish/list safe drafts to eBay => PUBLISH_SAFE_DRAFTS_SANDBOX with publish_mode "sandbox_only".
 - Block a category, e.g. "electronics kateqoriyasını blokla" => UPDATE_BLOCKED_CATEGORY.
 - Block a brand => UPDATE_BLOCKED_BRAND.
@@ -59,6 +64,7 @@ Safety rules:
 - Marketplace-to-marketplace dropshipping, e.g. Amazon/Walmart/Temu/AliExpress to eBay, is unsafe. Refuse or warn and ask to use approved wholesale supplier feeds, supplier CSVs, or supplier APIs.
 - Never approve high-risk category listing without safety checks. If uncertain, set needs_confirmation true or ask clarification.
 - Normal settings changes such as pause, resume, status, min margin, min profit, risk tolerance, test mode, daily limit, blocked category, and blocked brand can execute directly when clear.
+- SHOW_LISTING_DRAFTS, APPROVE_DRAFTS, and REVISE_DRAFT_HELP can execute directly when clear. APPROVE_DRAFTS must never publish to eBay.
 - ENABLE_TEST_MODE is allowed for sandbox/test workflows only. It lowers analysis thresholds to min profit 0.5 USD, min margin 5%, risk tolerance 40, max shipping 10 days, and daily listing limit 10. It must not unlock production publishing.
 - Sandbox publishing can execute only as PUBLISH_SAFE_DRAFTS_SANDBOX. Never output a production publish intent.
 - Keep safe_response short, natural, and in the user's language when possible.
