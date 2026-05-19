@@ -12,12 +12,43 @@ export interface EbayConfig {
   marketplaceId: string;
 }
 
-export function getEbayConfig(): EbayConfig {
+export interface EbayOAuthRuntimeInfo {
+  clientId?: string;
+  clientSecret?: string;
+  redirectUri?: string;
+  runame?: string;
+  oauthRedirectUri?: string;
+  redirectUriMode: "runame" | "url";
+  environment: "sandbox" | "production";
+  marketplaceId: string;
+}
+
+export function getEbayOAuthRuntimeInfo(): EbayOAuthRuntimeInfo {
   const clientId = getOptionalEnv("EBAY_CLIENT_ID");
   const clientSecret = getOptionalEnv("EBAY_CLIENT_SECRET");
   const redirectUri = getOptionalEnv("EBAY_REDIRECT_URI");
   const runame = getOptionalEnv("EBAY_RUNAME");
-  const requestedEnvironment = getOptionalEnv("EBAY_ENVIRONMENT") ?? "sandbox";
+  const requestedEnvironment = getOptionalEnv("EBAY_ENVIRONMENT") === "production" ? "production" : "sandbox";
+
+  return {
+    clientId,
+    clientSecret,
+    redirectUri,
+    runame,
+    oauthRedirectUri: runame ?? redirectUri,
+    redirectUriMode: runame ? "runame" : "url",
+    environment: requestedEnvironment,
+    marketplaceId: process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US"
+  };
+}
+
+export function getEbayConfig(): EbayConfig {
+  const runtime = getEbayOAuthRuntimeInfo();
+  const clientId = runtime.clientId;
+  const clientSecret = runtime.clientSecret;
+  const redirectUri = runtime.redirectUri;
+  const runame = runtime.runame;
+  const requestedEnvironment = runtime.environment;
 
   if (requestedEnvironment === "production") {
     throw new EbayIntegrationError(
@@ -40,7 +71,7 @@ export function getEbayConfig(): EbayConfig {
     );
   }
 
-  const oauthRedirectUri = runame ?? redirectUri;
+  const oauthRedirectUri = runtime.oauthRedirectUri;
 
   if (!oauthRedirectUri) {
     throw new EbayIntegrationError(
@@ -56,7 +87,7 @@ export function getEbayConfig(): EbayConfig {
     redirectUri,
     runame,
     oauthRedirectUri,
-    redirectUriMode: runame ? "runame" : "url",
+    redirectUriMode: runtime.redirectUriMode,
     environment: "sandbox",
     marketplaceId: process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US"
   };

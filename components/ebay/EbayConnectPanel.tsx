@@ -9,6 +9,7 @@ interface EbayConnectPanelProps {
   statusMessage?: string;
   statusTone?: "success" | "error";
   warningMessage?: string | null;
+  oauthDisabledReason?: string;
   connected: boolean;
   accountStatus: string;
   ebayUserId?: string | null;
@@ -25,6 +26,7 @@ export function EbayConnectPanel({
   statusMessage,
   statusTone = "success",
   warningMessage,
+  oauthDisabledReason,
   connected,
   accountStatus,
   ebayUserId,
@@ -104,7 +106,10 @@ export function EbayConnectPanel({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => window.location.assign("/api/ebay/oauth")}>
+          <Button
+            onClick={() => window.location.assign("/api/ebay/oauth")}
+            disabled={Boolean(oauthDisabledReason)}
+          >
             <KeyRound size={16} /> {connected ? "Reconnect sandbox" : "Connect sandbox"}
           </Button>
           {connected ? (
@@ -153,6 +158,7 @@ export function EbayConnectPanel({
       {warningMessage ? (
         <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
           {warningMessage}
+          {oauthDisabledReason ? <p className="mt-1 font-medium">{oauthDisabledReason}</p> : null}
         </div>
       ) : null}
 

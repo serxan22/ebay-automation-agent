@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getEbayConfig } from "@/lib/ebay/client";
-import { buildEbayOAuthUrl } from "@/lib/ebay/oauth";
+import { buildEbayOAuthUrl, getEbayOAuthScopes } from "@/lib/ebay/oauth";
 import { createEbayOAuthState } from "@/lib/ebay/oauth-state";
 import { createSupabaseServerClient, createSupabaseServiceClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 
@@ -24,6 +24,14 @@ export async function GET(request: Request) {
 
     const serviceSupabase = createSupabaseServiceClient();
     const config = getEbayConfig();
+    const scopes = getEbayOAuthScopes();
+
+    if (!config.runame) {
+      return redirectToSettings(
+        request,
+        "EBAY_RUNAME is missing. eBay sandbox OAuth must use the RuName as redirect_uri; add EBAY_RUNAME in Vercel before connecting."
+      );
+    }
 
     await logAutomationEvent({
       supabase: serviceSupabase,
@@ -57,7 +65,16 @@ export async function GET(request: Request) {
       }
     });
 
-    return NextResponse.redirect(buildEbayOAuthUrl(oauthState.state));
+    const authorizationUrl = buildEbayOAuthUrl(oauthState.state);
+
+    console.info("[ebay_oauth_debug]", {
+      redirectUriMode: config.redirectUriMode,
+      redirectUriActuallyUsed: config.oauthRedirectUri,
+      hasRuname: Boolean(config.runame),
+      scopesCount: scopes.length
+    });
+
+    return NextResponse.redirect(authorizationUrl);
   } catch (error) {
     console.error("[ebay_oauth] start_failed", {
       name: error instanceof Error ? error.name : "UnknownError",

@@ -13,6 +13,7 @@ export default async function SettingsPage({
 }) {
   const account = await loadEbayAccount();
   const connected = account?.status === "connected";
+  const runameWarning = getEbayRunameWarning();
   const statusMessage = getEbayStatusMessage(searchParams);
   const statusTone = searchParams?.ebay === "error" || searchParams?.ebay === "declined" ? "error" : "success";
 
@@ -28,7 +29,12 @@ export default async function SettingsPage({
       <EbayConnectPanel
         statusMessage={statusMessage}
         statusTone={statusTone}
-        warningMessage={getEbayRunameWarning()}
+        warningMessage={runameWarning}
+        oauthDisabledReason={
+          runameWarning
+            ? "Connect sandbox is disabled because EBAY_RUNAME is missing in the server environment."
+            : undefined
+        }
         connected={connected}
         accountStatus={account?.status ?? "disconnected"}
         ebayUserId={account?.ebay_user_id}

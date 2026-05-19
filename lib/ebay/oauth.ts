@@ -1,4 +1,4 @@
-import { getEbayApiBaseUrl, getEbayConfig } from "@/lib/ebay/client";
+import { getEbayApiBaseUrl, getEbayConfig, getEbayOAuthRuntimeInfo } from "@/lib/ebay/client";
 import { EbayIntegrationError, getEbayErrorRecommendation } from "@/lib/ebay/errors";
 
 const scopes = [
@@ -10,10 +10,7 @@ const scopes = [
 
 export function buildEbayOAuthUrl(state: string) {
   const config = getEbayConfig();
-  const authBase =
-    config.environment === "production"
-      ? "https://auth.ebay.com/oauth2/authorize"
-      : "https://auth.sandbox.ebay.com/oauth2/authorize";
+  const authBase = getEbayAuthorizationBaseUrl(config.environment);
   const url = new URL(authBase);
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("redirect_uri", config.oauthRedirectUri);
@@ -33,8 +30,39 @@ export function buildEbayOAuthUrl(state: string) {
   return url.toString();
 }
 
+export function getEbayAuthorizationBaseUrl(environment: "sandbox" | "production") {
+  return environment === "production"
+    ? "https://auth.ebay.com/oauth2/authorize"
+    : "https://auth.sandbox.ebay.com/oauth2/authorize";
+}
+
 export function getEbayOAuthScopes() {
   return [...scopes];
+}
+
+export function getEbayOAuthDebugInfo() {
+  const runtime = getEbayOAuthRuntimeInfo();
+  const authorizationBaseUrl = getEbayAuthorizationBaseUrl(runtime.environment);
+  const sampleAuthorizeUrl = new URL(authorizationBaseUrl);
+
+  sampleAuthorizeUrl.searchParams.set("client_id", runtime.clientId ?? "MISSING_EBAY_CLIENT_ID");
+  sampleAuthorizeUrl.searchParams.set("redirect_uri", runtime.oauthRedirectUri ?? "MISSING_EBAY_RUNAME_OR_REDIRECT_URI");
+  sampleAuthorizeUrl.searchParams.set("response_type", "code");
+  sampleAuthorizeUrl.searchParams.set("scope", scopes.join(" "));
+
+  return {
+    environment: runtime.environment,
+    authorizationBaseUrl,
+    hasClientId: Boolean(runtime.clientId),
+    hasClientSecret: Boolean(runtime.clientSecret),
+    hasRuname: Boolean(runtime.runame),
+    runame: runtime.runame ?? null,
+    redirectUriFromEnv: runtime.redirectUri ?? null,
+    redirectUriActuallyUsed: runtime.oauthRedirectUri ?? null,
+    redirectUriMode: runtime.redirectUriMode,
+    scopes: getEbayOAuthScopes(),
+    sampleAuthorizeUrlWithoutState: sampleAuthorizeUrl.toString()
+  };
 }
 
 export async function exchangeEbayCodeForTokens(code: string) {
