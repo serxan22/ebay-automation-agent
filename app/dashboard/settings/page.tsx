@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { KeyRound, ShieldCheck, Store, WandSparkles } from "lucide-react";
 import { EbayConnectPanel } from "@/components/ebay/EbayConnectPanel";
 import { SettingsSection } from "@/components/settings/SettingsSection";
@@ -46,6 +47,21 @@ export default async function SettingsPage({
         fulfillmentPolicy={account?.fulfillment_policy_name ?? account?.fulfillment_policy_id}
         inventoryLocation={account?.inventory_location_name ?? account?.inventory_location_key}
       />
+
+      <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
+        <h2 className="font-semibold">eBay OAuth callback diagnostic</h2>
+        <p className="mt-2">
+          If eBay shows &quot;Authorization successfully completed. safe to close&quot; and the app remains disconnected,
+          eBay did not call the callback URL. Create a new RuName in eBay Developer and make sure Auth accepted URL
+          is exactly https://ebay-automation-agent.vercel.app/api/ebay/oauth/callback.
+        </p>
+        <Link
+          href="/dashboard/settings/ebay-debug"
+          className="mt-4 inline-flex h-10 items-center justify-center rounded-md bg-ink-950 px-4 text-sm font-medium text-white hover:bg-ink-800 dark:bg-mint-500 dark:text-ink-950"
+        >
+          Open eBay OAuth debug
+        </Link>
+      </section>
 
       <SettingsSection title="eBay account" description="OAuth and sandbox policy configuration.">
         <SettingRow

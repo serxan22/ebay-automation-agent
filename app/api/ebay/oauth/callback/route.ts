@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getEbayConfig } from "@/lib/ebay/client";
-import { exchangeEbayCodeForTokens, getEbayOAuthScopes, getEbayUserIdentity } from "@/lib/ebay/oauth";
+import { exchangeEbayCodeForTokens, getEbayOAuthScopes, getEbayUserIdentity, sanitizeOAuthUrlForLogs } from "@/lib/ebay/oauth";
 import { validateAndConsumeEbayOAuthState } from "@/lib/ebay/oauth-state";
 import { createSupabaseServiceClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 import { encryptSecret } from "@/lib/utils/crypto";
@@ -16,6 +16,12 @@ const oauthCallbackSchema = z.object({
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
+  console.info("[ebay_oauth_callback_hit]", {
+    hasCode: Boolean(url.searchParams.get("code")),
+    hasState: Boolean(url.searchParams.get("state")),
+    fullUrlWithoutSensitiveData: sanitizeOAuthUrlForLogs(url.toString())
+  });
+
   const parsed = oauthCallbackSchema.parse({
     code: url.searchParams.get("code"),
     state: url.searchParams.get("state"),

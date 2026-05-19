@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getEbayConfig } from "@/lib/ebay/client";
-import { buildEbayOAuthUrl, getEbayOAuthScopes } from "@/lib/ebay/oauth";
+import { buildEbayOAuthUrl, getEbayOAuthScopes, sanitizeOAuthUrlForLogs } from "@/lib/ebay/oauth";
 import { createEbayOAuthState } from "@/lib/ebay/oauth-state";
 import { createSupabaseServerClient, createSupabaseServiceClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 
@@ -71,7 +71,10 @@ export async function GET(request: Request) {
       redirectUriMode: config.redirectUriMode,
       redirectUriActuallyUsed: config.oauthRedirectUri,
       hasRuname: Boolean(config.runame),
-      scopesCount: scopes.length
+      scopesCount: scopes.length,
+      fullSafeAuthorizeUrl: sanitizeOAuthUrlForLogs(authorizationUrl),
+      responseType: "code",
+      statePresent: authorizationUrl.includes("state=")
     });
 
     return NextResponse.redirect(authorizationUrl);

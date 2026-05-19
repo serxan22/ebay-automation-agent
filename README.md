@@ -204,6 +204,33 @@ Run the Phase 4 migration before testing OAuth persistence:
 
 OAuth state is saved in `public.ebay_oauth_states`, so the callback can persist tokens even if the browser cookie/session context changes during the eBay redirect.
 
+### OAuth Diagnostics
+
+Use these routes to confirm whether the app or eBay Developer RuName binding is the problem:
+
+```text
+https://ebay-automation-agent.vercel.app/api/ebay/oauth/callback-test
+```
+
+This must return:
+
+```json
+{ "ok": true, "message": "callback route reachable" }
+```
+
+Then test OAuth diagnostics:
+
+1. Open `https://ebay-automation-agent.vercel.app/api/ebay/oauth/debug`.
+2. Confirm `hasRuname=true`, `redirectUriMode=runame`, and `redirectUriActuallyUsed=Sarkhan_Mahabba-SarkhanM-Dropsh-noiaygbc`.
+3. Sign in to the dashboard and open `https://ebay-automation-agent.vercel.app/dashboard/settings/ebay-debug`.
+4. Click `Copy OAuth URL`, or call `https://ebay-automation-agent.vercel.app/api/ebay/oauth/manual-url`.
+5. Copy `authorizeUrl`.
+6. Open `authorizeUrl` in a fresh private/incognito browser.
+7. Complete eBay sandbox login and consent.
+8. If Vercel logs show `/api/ebay/oauth/callback`, the app callback is being reached.
+9. If eBay shows "Authorization successfully completed. It's now safe to close the browser window/tab" and no callback log appears, eBay did not call the callback URL. The issue is eBay Developer RuName callback binding, not the app.
+10. In that case, create a new eBay Redirect URL/RuName, set Auth accepted URL exactly to `https://ebay-automation-agent.vercel.app/api/ebay/oauth/callback`, and update `EBAY_RUNAME` in Vercel.
+
 Sandbox publishing flow:
 
 1. Connect eBay from `/dashboard/settings`.

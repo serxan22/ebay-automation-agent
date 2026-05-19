@@ -1,5 +1,6 @@
 import { getEbayApiBaseUrl, getEbayConfig, getEbayOAuthRuntimeInfo } from "@/lib/ebay/client";
 import { EbayIntegrationError, getEbayErrorRecommendation } from "@/lib/ebay/errors";
+import { getAppUrl } from "@/lib/utils/env";
 
 const scopes = [
   "https://api.ebay.com/oauth/api_scope",
@@ -63,6 +64,24 @@ export function getEbayOAuthDebugInfo() {
     scopes: getEbayOAuthScopes(),
     sampleAuthorizeUrlWithoutState: sampleAuthorizeUrl.toString()
   };
+}
+
+export function getExpectedEbayCallbackUrl() {
+  const runtime = getEbayOAuthRuntimeInfo();
+  return runtime.redirectUri ?? `${getAppUrl()}/api/ebay/oauth/callback`;
+}
+
+export function sanitizeOAuthUrlForLogs(value: string) {
+  const url = new URL(value);
+  const sensitiveParams = ["code", "state"];
+
+  for (const param of sensitiveParams) {
+    if (url.searchParams.has(param)) {
+      url.searchParams.set(param, "PRESENT");
+    }
+  }
+
+  return url.toString();
 }
 
 export async function exchangeEbayCodeForTokens(code: string) {
