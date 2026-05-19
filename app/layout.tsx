@@ -5,8 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "eBay Agent System",
-  description: "AI-powered policy-compliant eBay automation dashboard"
+  title: "Seller Automation Agent",
+  description: "AI-powered policy-compliant seller automation dashboard"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -53,9 +53,9 @@ export default async function SettingsPage({
         <p className="mt-2">
           If eBay shows &quot;Authorization successfully completed. safe to close&quot; and the app remains disconnected,
           eBay did not call the callback URL. Use clean eBay Developer URLs: Privacy Policy URL
-          https://ebay-automation-agent.vercel.app/privacy, Auth accepted URL
-          https://ebay-automation-agent.vercel.app/ebay/callback, and Auth declined URL
-          https://ebay-automation-agent.vercel.app/ebay/declined.
+          https://seller-automation-agent.vercel.app/privacy, Auth accepted URL
+          https://seller-automation-agent.vercel.app/market/callback, and Auth declined URL
+          https://seller-automation-agent.vercel.app/market/declined.
         </p>
         <Link
           href="/dashboard/settings/ebay-debug"

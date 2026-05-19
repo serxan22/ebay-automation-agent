@@ -36,6 +36,8 @@ export function EbayOAuthDebugPanel({ debug, manual, error }: EbayOAuthDebugPane
   const [manualUrl, setManualUrl] = useState(manual);
   const [message, setMessage] = useState(error ?? "");
   const [loading, setLoading] = useState(false);
+  const callbackUrl = manualUrl?.expectedCallbackUrl ?? debug.expectedCallbackUrl ?? debug.redirectUriFromEnv ?? "";
+  const developerUrls = getDeveloperUrls(callbackUrl);
 
   async function copyAuthorizeUrl() {
     if (!manualUrl?.authorizeUrl) {
@@ -85,7 +87,12 @@ export function EbayOAuthDebugPanel({ debug, manual, error }: EbayOAuthDebugPane
       <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
         If eBay shows &quot;Authorization successfully completed. It&apos;s now safe to close the browser window/tab&quot; and the
         app remains disconnected, eBay did not call the callback URL. Create a new RuName in eBay Developer and make
-        sure Auth accepted URL is exactly {manualUrl?.expectedCallbackUrl ?? debug.expectedCallbackUrl ?? debug.redirectUriFromEnv}.
+        sure these URLs are set exactly:
+        <div className="mt-3 space-y-1 font-mono text-xs">
+          <p>Privacy Policy URL: {developerUrls.privacyUrl}</p>
+          <p>Auth accepted URL: {developerUrls.callbackUrl}</p>
+          <p>Auth declined URL: {developerUrls.declinedUrl}</p>
+        </div>
       </section>
 
       <section className="rounded-lg border border-ink-200 bg-white p-5 dark:border-white/10 dark:bg-white/[0.04]">
@@ -163,6 +170,25 @@ export function EbayOAuthDebugPanel({ debug, manual, error }: EbayOAuthDebugPane
       </section>
     </div>
   );
+}
+
+function getDeveloperUrls(callbackUrl: string) {
+  const fallbackOrigin = "https://seller-automation-agent.vercel.app";
+
+  try {
+    const origin = callbackUrl ? new URL(callbackUrl).origin : fallbackOrigin;
+    return {
+      privacyUrl: `${origin}/privacy`,
+      callbackUrl: callbackUrl || `${origin}/market/callback`,
+      declinedUrl: `${origin}/market/declined`
+    };
+  } catch {
+    return {
+      privacyUrl: `${fallbackOrigin}/privacy`,
+      callbackUrl: `${fallbackOrigin}/market/callback`,
+      declinedUrl: `${fallbackOrigin}/market/declined`
+    };
+  }
 }
 
 function DebugItem({ label, value }: { label: string; value: string }) {

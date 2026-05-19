@@ -102,7 +102,7 @@ export async function ensureInventoryLocation({
 
     await createInventoryLocation(accessToken, {
       merchantLocationKey,
-      name: input?.name ?? "eBay Agent Sandbox Warehouse",
+      name: input?.name ?? "Seller Automation Sandbox Warehouse",
       country: input?.country ?? "US",
       postalCode: input?.postalCode ?? "10001",
       city: input?.city,
@@ -110,7 +110,7 @@ export async function ensureInventoryLocation({
     });
     location = {
       merchantLocationKey,
-      name: input?.name ?? "eBay Agent Sandbox Warehouse",
+      name: input?.name ?? "Seller Automation Sandbox Warehouse",
       merchantLocationStatus: "ENABLED",
       location: {
         address: {
@@ -127,7 +127,7 @@ export async function ensureInventoryLocation({
     .from("ebay_accounts")
     .update({
       inventory_location_key: merchantLocationKey,
-      inventory_location_name: location.name ?? input?.name ?? "eBay Agent Sandbox Warehouse",
+      inventory_location_name: location.name ?? input?.name ?? "Seller Automation Sandbox Warehouse",
       inventory_location_status: location.merchantLocationStatus ?? "ENABLED",
       last_location_sync_at: new Date().toISOString()
     })

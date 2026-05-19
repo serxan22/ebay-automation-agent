@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy | eBay Automation Agent",
-  description: "Privacy practices for the eBay Automation Agent sandbox integration."
+  title: "Privacy Policy | Seller Automation Agent",
+  description: "Privacy practices for the Seller Automation Agent sandbox integration."
 };
 
 export default function PrivacyPage() {
@@ -16,9 +16,9 @@ export default function PrivacyPage() {
 
         <div className="mt-8 rounded-lg border border-ink-200 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
           <p className="text-sm font-semibold uppercase text-brand-700 dark:text-brand-300">Privacy Policy</p>
-          <h1 className="mt-3 text-3xl font-semibold text-ink-950 dark:text-white">eBay Automation Agent</h1>
+          <h1 className="mt-3 text-3xl font-semibold text-ink-950 dark:text-white">Seller Automation Agent</h1>
           <p className="mt-4 text-sm leading-6 text-ink-600 dark:text-ink-300">
-            eBay Automation Agent is an eBay automation dashboard that helps users test automation workflows with eBay sandbox authorization. This page
+            Seller Automation Agent is a seller automation dashboard that helps users test automation workflows with sandbox marketplace authorization. This page
             explains how the app handles account and automation data.
           </p>
 

@@ -36,7 +36,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             <ShieldCheck size={20} />
           </div>
           <div>
-            <p className="font-semibold text-ink-950 dark:text-white">eBay Agent</p>
+            <p className="font-semibold text-ink-950 dark:text-white">Seller Automation Agent</p>
             <p className="text-xs text-ink-500 dark:text-ink-400">Policy-safe operator</p>
           </div>
         </Link>

@@ -53,7 +53,7 @@ export function EbayConnectPanel({
       body:
         action === "location"
           ? JSON.stringify({
-              name: "eBay Agent Sandbox Warehouse",
+              name: "Seller Automation Sandbox Warehouse",
               country: "US",
               postalCode: "10001"
             })

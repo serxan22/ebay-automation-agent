@@ -70,7 +70,7 @@ export function getEbayOAuthDebugInfo() {
 
 export function getExpectedEbayCallbackUrl() {
   const runtime = getEbayOAuthRuntimeInfo();
-  return runtime.redirectUri ?? `${getAppUrl()}/ebay/callback`;
+  return runtime.redirectUri ?? `${getAppUrl()}/market/callback`;
 }
 
 export function sanitizeOAuthUrlForLogs(value: string) {
