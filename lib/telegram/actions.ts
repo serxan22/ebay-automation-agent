@@ -103,6 +103,12 @@ export async function executeTelegramIntentAction({
       return changeDailyLimit({ supabase, userId, value: getNumber(intent.parameters.quantity) });
     case "CHANGE_MIN_MARGIN":
       return changeMinMargin({ supabase, userId, value: getNumber(intent.parameters.min_margin_percentage) });
+    case "CHANGE_MIN_PROFIT":
+      return changeMinProfit({ supabase, userId, value: getNumber(intent.parameters.min_profit_amount) });
+    case "CHANGE_RISK_TOLERANCE":
+      return changeRiskTolerance({ supabase, userId, value: getNumber(intent.parameters.risk_tolerance) });
+    case "ENABLE_TEST_MODE":
+      return enableTestMode({ supabase, userId });
     case "FIND_PRODUCTS":
       return findProducts({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 10 });
     case "ANALYZE_PRODUCTS":
@@ -162,7 +168,7 @@ async function showStatus({ supabase, userId }: ActionContext) {
 
   return {
     ok: true,
-    message: `Status: automation ${settings.autoListingEnabled ? "aktivdir" : "dayandırılıb"}, daily limit ${settings.dailyListingLimit}, min margin ${settings.minMarginPercentage}%, approval mode ${settings.approvalMode}. Suppliers ${suppliers.count ?? 0}, products ${products.count ?? 0}, active drafts ${activeDrafts}, failed tasks today ${failedTasks}. eBay ${ebay.data?.status ?? "not connected"} (${ebay.data?.marketplace ?? "sandbox"}).`
+    message: `Status: auto_listing_enabled ${settings.autoListingEnabled ? "true (aktivdir)" : "false (dayandırılıb)"}, daily_listing_limit ${settings.dailyListingLimit}, min_profit_amount $${settings.minProfitAmount}, min_margin_percentage ${settings.minMarginPercentage}%, risk_tolerance ${settings.riskTolerance}, max_shipping_days ${settings.maxShippingDays}, approval_mode ${settings.approvalMode}. Suppliers ${suppliers.count ?? 0}, products ${products.count ?? 0}, active drafts ${activeDrafts}, failed tasks today ${failedTasks}. eBay ${ebay.data?.status ?? "not connected"} (${ebay.data?.marketplace ?? "sandbox"}).`
   };
 }
 
@@ -246,6 +252,65 @@ async function changeMinMargin({ supabase, userId, value }: ActionContext & { va
   return { ok: true, message: `Minimum margin changed to ${value}%.` };
 }
 
+async function changeMinProfit({ supabase, userId, value }: ActionContext & { value?: number }) {
+  if (value === undefined || value < 0 || value > 10000) {
+    return { ok: false, message: "Minimum profit must be a number between 0 and 10000 dollars." };
+  }
+
+  await ensureSettingsRow(supabase, userId);
+  const { error } = await supabase
+    .from("automation_settings")
+    .update({ min_profit_amount: value })
+    .eq("user_id", userId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return { ok: true, message: `Minimum profit ${value} dollar olaraq yeniləndi.` };
+}
+
+async function changeRiskTolerance({ supabase, userId, value }: ActionContext & { value?: number }) {
+  if (value === undefined || value < 0 || value > 100) {
+    return { ok: false, message: "Risk tolerance must be between 0 and 100." };
+  }
+
+  await ensureSettingsRow(supabase, userId);
+  const { error } = await supabase
+    .from("automation_settings")
+    .update({ risk_tolerance: value })
+    .eq("user_id", userId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return { ok: true, message: `Risk tolerance ${value} olaraq yeniləndi.` };
+}
+
+async function enableTestMode({ supabase, userId }: ActionContext) {
+  await ensureSettingsRow(supabase, userId);
+  const { error } = await supabase
+    .from("automation_settings")
+    .update({
+      min_profit_amount: 0.5,
+      min_margin_percentage: 5,
+      risk_tolerance: 40,
+      max_shipping_days: 10,
+      daily_listing_limit: 10
+    })
+    .eq("user_id", userId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return {
+    ok: true,
+    message: "Test mode aktiv edildi: min profit $0.5, margin 5%, risk tolerance 40, max shipping 10 days."
+  };
+}
+
 async function findProducts({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
   const { data, error } = await supabase
     .from("supplier_products")
@@ -280,6 +345,7 @@ async function analyzeProducts({ supabase, userId, quantity }: ActionContext & {
 
   let approved = 0;
   let rejected = 0;
+  const rejectionCounts = new Map<string, number>();
 
   for (const product of products) {
     const supplier = suppliers.find((item) => item.id === product.supplierId) ?? null;
@@ -287,7 +353,14 @@ async function analyzeProducts({ supabase, userId, quantity }: ActionContext & {
     approved += analysis.approvedForListing ? 1 : 0;
     rejected += analysis.approvedForListing ? 0 : 1;
 
-    await supabase.from("product_analysis").insert({
+    if (!analysis.approvedForListing) {
+      for (const reason of analysis.rejectionReasons) {
+        const groupedReason = groupRejectionReason(reason);
+        rejectionCounts.set(groupedReason, (rejectionCounts.get(groupedReason) ?? 0) + 1);
+      }
+    }
+
+    const { error } = await supabase.from("product_analysis").insert({
       user_id: userId,
       supplier_product_id: product.id,
       profit_score: analysis.profitScore,
@@ -306,11 +379,19 @@ async function analyzeProducts({ supabase, userId, quantity }: ActionContext & {
       rejection_reasons: analysis.rejectionReasons,
       approved_for_listing: analysis.approvedForListing
     });
+
+    if (error) {
+      throw new Error(error.message);
+    }
   }
+
+  const reasons = formatGroupedRejectionReasons(rejectionCounts);
 
   return {
     ok: true,
-    message: `${products.length} products analyzed: ${approved} approved, ${rejected} rejected by safety/profit rules.`
+    message: `${products.length} products analyzed: ${approved} approved, ${rejected} rejected.${
+      reasons ? `\nReasons:\n${reasons}` : ""
+    }`
   };
 }
 
@@ -704,6 +785,58 @@ function getNumber(value: unknown) {
 
 function getString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function groupRejectionReason(reason: string) {
+  if (/estimated profit/i.test(reason)) {
+    return "Estimated profit below minimum";
+  }
+
+  if (/margin/i.test(reason)) {
+    return "Margin below minimum";
+  }
+
+  if (/risk score/i.test(reason)) {
+    return "Risk score below tolerance";
+  }
+
+  if (/image quality|no usable supplier images/i.test(reason)) {
+    return "Image requirement failed";
+  }
+
+  if (/shipping time/i.test(reason)) {
+    return "Shipping time above maximum";
+  }
+
+  if (/stock is below/i.test(reason)) {
+    return "Stock below minimum";
+  }
+
+  if (/blocked category/i.test(reason)) {
+    return "Blocked category matched";
+  }
+
+  if (/blocked brand/i.test(reason)) {
+    return "Blocked brand matched";
+  }
+
+  if (/supplier/i.test(reason)) {
+    return "Supplier compliance issue";
+  }
+
+  if (/required sku|missing/i.test(reason)) {
+    return "Missing required product data";
+  }
+
+  return reason.replace(/\.$/, "");
+}
+
+function formatGroupedRejectionReasons(rejectionCounts: Map<string, number>) {
+  return Array.from(rejectionCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([reason, count]) => `- ${reason}: ${count} ${count === 1 ? "product" : "products"}`)
+    .join("\n");
 }
 
 function startOfTodayIso() {

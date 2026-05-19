@@ -22,6 +22,24 @@ export function ProductDrawer({
           <p className="text-xs text-ink-500 dark:text-ink-400">{product.supplierSku}</p>
         </div>
       </div>
+      <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
+        <div className="rounded-md bg-white p-3 dark:bg-ink-950">
+          <p className="text-xs text-ink-500 dark:text-ink-400">Recommended eBay price</p>
+          <p className="mt-1 font-semibold text-ink-950 dark:text-white">${analysis.recommendedEbayPrice.toFixed(2)}</p>
+        </div>
+        <div className="rounded-md bg-white p-3 dark:bg-ink-950">
+          <p className="text-xs text-ink-500 dark:text-ink-400">Analysis result</p>
+          <p className="mt-1 font-semibold text-ink-950 dark:text-white">
+            {analysis.approvedForListing ? "Approved for listing" : "Rejected by rules"}
+          </p>
+        </div>
+        <div className="rounded-md bg-white p-3 dark:bg-ink-950">
+          <p className="text-xs text-ink-500 dark:text-ink-400">Scores</p>
+          <p className="mt-1 font-semibold text-ink-950 dark:text-white">
+            Risk {analysis.riskScore} / Final {analysis.finalScore}
+          </p>
+        </div>
+      </div>
       <p className="mt-4 text-sm text-ink-600 dark:text-ink-300">{analysis.aiNotes}</p>
       {analysis.rejectionReasons.length ? (
         <ul className="mt-4 space-y-2 text-sm text-coral-700 dark:text-coral-300">

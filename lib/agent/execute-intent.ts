@@ -41,6 +41,9 @@ export async function executeTelegramIntent({
     case "RESUME_AUTOMATION":
     case "CHANGE_DAILY_LIMIT":
     case "CHANGE_MIN_MARGIN":
+    case "CHANGE_MIN_PROFIT":
+    case "CHANGE_RISK_TOLERANCE":
+    case "ENABLE_TEST_MODE":
     case "UPDATE_BLOCKED_CATEGORY":
     case "UPDATE_BLOCKED_BRAND":
     case "CHANGE_APPROVAL_MODE":

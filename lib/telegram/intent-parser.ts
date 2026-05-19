@@ -10,6 +10,9 @@ export const TelegramIntentNameSchema = z.enum([
   "SHOW_DAILY_REPORT",
   "CHANGE_DAILY_LIMIT",
   "CHANGE_MIN_MARGIN",
+  "CHANGE_MIN_PROFIT",
+  "CHANGE_RISK_TOLERANCE",
+  "ENABLE_TEST_MODE",
   "FIND_PRODUCTS",
   "ANALYZE_PRODUCTS",
   "CREATE_LISTING_DRAFTS",
@@ -50,6 +53,7 @@ export const TelegramIntentParametersSchema = z
     quantity: NullableNumberSchema.default(null),
     min_margin_percentage: NullableNumberSchema.default(null),
     min_profit_amount: NullableNumberSchema.default(null),
+    risk_tolerance: NullableNumberSchema.default(null),
     category: NullableStringSchema.default(null),
     blocked_category: NullableStringSchema.default(null),
     blocked_brand: NullableStringSchema.default(null),
@@ -63,6 +67,7 @@ export const TelegramIntentParametersSchema = z
     quantity: null,
     min_margin_percentage: null,
     min_profit_amount: null,
+    risk_tolerance: null,
     category: null,
     blocked_category: null,
     blocked_brand: null,
@@ -194,6 +199,8 @@ export function parseTelegramIntentHeuristically(
   const text = normalizeCommandText(message);
   const quantity = extractQuantity(text);
   const margin = extractMargin(text);
+  const minProfit = extractMinProfit(text);
+  const riskTolerance = extractRiskTolerance(text);
   const language = detectLanguage(text);
   const parameters = defaultIntentParameters();
 
@@ -203,6 +210,14 @@ export function parseTelegramIntentHeuristically(
 
   if (margin) {
     parameters.min_margin_percentage = margin;
+  }
+
+  if (minProfit !== undefined) {
+    parameters.min_profit_amount = minProfit;
+  }
+
+  if (riskTolerance !== undefined) {
+    parameters.risk_tolerance = riskTolerance;
   }
 
   if (/\bus\b|amerika|united states/.test(text)) {
@@ -272,6 +287,30 @@ export function parseTelegramIntentHeuristically(
       parameters: { ...parameters, approval_mode: "manual" },
       confidence: 0.76,
       safe_response: "Riskli məhsullar auto-list edilməsin deyə manual approval mode istifadə olunacaq."
+    });
+  }
+
+  if (isTestModeRequest(text)) {
+    return makeIntent("ENABLE_TEST_MODE", language, {
+      parameters,
+      confidence: 0.9,
+      safe_response: "Test mode aktiv ediləcək: min profit $0.5, margin 5%, risk tolerance 40, max shipping 10 days."
+    });
+  }
+
+  if (riskTolerance !== undefined && /(risk|tolerance|seviyye|səviyyə|seviyyesini|səviyyəsini)/.test(text)) {
+    return makeIntent("CHANGE_RISK_TOLERANCE", language, {
+      parameters: { ...parameters, risk_tolerance: riskTolerance },
+      confidence: 0.9,
+      safe_response: `Risk tolerance ${riskTolerance} olaraq yeniləndi.`
+    });
+  }
+
+  if (minProfit !== undefined && /(profit|qazanc|dollar|\$|usd)/.test(text)) {
+    return makeIntent("CHANGE_MIN_PROFIT", language, {
+      parameters: { ...parameters, min_profit_amount: minProfit },
+      confidence: 0.9,
+      safe_response: `Minimum profit ${minProfit} dollar olaraq yeniləndi.`
     });
   }
 
@@ -426,6 +465,31 @@ export function parseDeterministicControlIntent(
     }
   }
 
+  const minProfit = extractMinProfit(text);
+  if (minProfit !== undefined && /(profit|qazanc|dollar|\$|usd)/.test(text)) {
+    return makeIntent("CHANGE_MIN_PROFIT", language, {
+      parameters: { min_profit_amount: minProfit },
+      confidence: 0.92,
+      safe_response: `Minimum profit ${minProfit} dollar olaraq yeniləndi.`
+    });
+  }
+
+  const riskTolerance = extractRiskTolerance(text);
+  if (riskTolerance !== undefined && /(risk|tolerance|seviyye|səviyyə|seviyyesini|səviyyəsini)/.test(text)) {
+    return makeIntent("CHANGE_RISK_TOLERANCE", language, {
+      parameters: { risk_tolerance: riskTolerance },
+      confidence: 0.92,
+      safe_response: `Risk tolerance ${riskTolerance} olaraq yeniləndi.`
+    });
+  }
+
+  if (isTestModeRequest(text)) {
+    return makeIntent("ENABLE_TEST_MODE", language, {
+      confidence: 0.94,
+      safe_response: "Test mode aktiv edildi: min profit $0.5, margin 5%, risk tolerance 40, max shipping 10 days."
+    });
+  }
+
   return null;
 }
 
@@ -458,7 +522,10 @@ export const telegramIntentExamples: Array<{ message: string; expectedIntent: Te
   { message: "bugünkü statusu göstər", expectedIntent: "SHOW_STATUS" },
   { message: "sistem işləyir?", expectedIntent: "SHOW_STATUS" },
   { message: "bot işləyir?", expectedIntent: "SHOW_STATUS" },
-  { message: "show status", expectedIntent: "SHOW_STATUS" }
+  { message: "show status", expectedIntent: "SHOW_STATUS" },
+  { message: "minimum profit 0.5 dollar olsun", expectedIntent: "CHANGE_MIN_PROFIT" },
+  { message: "risk tolerance 40 olsun", expectedIntent: "CHANGE_RISK_TOLERANCE" },
+  { message: "test mode aktiv et", expectedIntent: "ENABLE_TEST_MODE" }
 ];
 
 export function runTelegramIntentExamples() {
@@ -561,6 +628,7 @@ function normalizeParameters(parameters?: Partial<TelegramIntent["parameters"]> 
     quantity: raw.quantity ?? raw.daily_listing_limit ?? null,
     min_margin_percentage: raw.min_margin_percentage ?? raw.margin ?? null,
     min_profit_amount: raw.min_profit_amount ?? null,
+    risk_tolerance: raw.risk_tolerance ?? null,
     category: raw.category ?? null,
     blocked_category: raw.blocked_category ?? raw.category_to_block ?? null,
     blocked_brand: raw.blocked_brand ?? raw.brand ?? null,
@@ -576,6 +644,7 @@ function defaultIntentParameters(): z.infer<typeof TelegramIntentParametersSchem
     quantity: null,
     min_margin_percentage: null,
     min_profit_amount: null,
+    risk_tolerance: null,
     category: null,
     blocked_category: null,
     blocked_brand: null,
@@ -592,8 +661,28 @@ function extractQuantity(text: string) {
 }
 
 function extractMargin(text: string) {
-  const match = text.match(/(\d{1,3})\s*(%|faiz|percent)/);
+  const match = text.match(/(\d{1,3}(?:\.\d+)?)\s*(%|faiz|percent)/);
   return match ? Number(match[1]) : undefined;
+}
+
+function extractMinProfit(text: string) {
+  const match = text.match(/(?:minimum|min|ən az|en az)?\s*(?:profit|qazanc|net profit|minimum profit|min profit).*?(\d{1,4}(?:\.\d{1,2})?)\s*(?:dollar|usd|\$)?/);
+  const reversed = text.match(/(\d{1,4}(?:\.\d{1,2})?)\s*(?:dollar|usd|\$).*(?:profit|qazanc)/);
+  const value = match?.[1] ?? reversed?.[1];
+  const parsed = value ? Number(value) : undefined;
+
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function extractRiskTolerance(text: string) {
+  const match = text.match(/(?:risk(?:\s+tolerance)?|risk\s*(?:seviyyesini|səviyyəsini|seviyye|səviyyə)).*?(\d{1,3})/);
+  const parsed = match?.[1] ? Number(match[1]) : undefined;
+
+  if (parsed === undefined || !Number.isFinite(parsed)) {
+    return undefined;
+  }
+
+  return Math.max(0, Math.min(100, parsed));
 }
 
 function detectLanguage(text: string): TelegramIntent["language"] {
@@ -601,7 +690,7 @@ function detectLanguage(text: string): TelegramIntent["language"] {
     /[əğıöşüç]/.test(text) ||
     /\b(qaqa|bugun|bugün|mehsul|məhsul|yerlesdir|yerləşdir|goster|göstər|aktiv et|dayandir|dayandır|isleyir|işləyir|sistemi|botu|davam etdir|yeniden|yenidən|faiz|qoy)\b/.test(text);
   const hasTr = /\b(urun|ürün|listele|goster|göster|durdur|çalışıyor|calisiyor|bugün|gunluk|günlük)\b/.test(text);
-  const hasEnglish = /\b(automation|status|report|find|publish|draft|safe|supplier|explain|daily|limit|margin|profit)\b/.test(text);
+  const hasEnglish = /\b(automation|status|report|find|publish|draft|safe|supplier|explain|daily|limit|margin|profit|risk|tolerance|test)\b/.test(text);
 
   if ((hasAz || hasTr) && hasEnglish) {
     return "mixed";
@@ -686,6 +775,11 @@ function isProductionPublishRequest(text: string) {
 
 function isUnsafeDropshippingRequest(text: string) {
   return /(amazon|walmart|aliexpress|temu|etsy).*(ebay|dropship|dropshipping)|marketplace[-\s]?to[-\s]?marketplace/.test(text);
+}
+
+function isTestModeRequest(text: string) {
+  return /(test mode|test qayda|qaydalari test|qaydaları test|test ucun|test üçün|yumşalt|yumsalt)/.test(text) &&
+    /(aktiv|enable|et|ele|elə|yumsalt|yumşalt|mode|qayda)/.test(text);
 }
 
 function extractBlockedCategory(message: string) {

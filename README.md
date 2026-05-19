@@ -256,6 +256,9 @@ The `/dashboard/telegram` page shows `AI active` when Groq, OpenAI, or Anthropic
 - `RESUME_AUTOMATION`
 - `CHANGE_DAILY_LIMIT`
 - `CHANGE_MIN_MARGIN`
+- `CHANGE_MIN_PROFIT`
+- `CHANGE_RISK_TOLERANCE`
+- `ENABLE_TEST_MODE`
 - `FIND_PRODUCTS`
 - `ANALYZE_PRODUCTS`
 - `CREATE_LISTING_DRAFTS`
@@ -272,7 +275,10 @@ Example messages:
 - `qaqa automationu aktiv et`
 - `botu işə sal`
 - `bugün 10 dənə yaxşı məhsul tap, riskli şeyləri list eləmə`
-- `minimum profit 20 faiz olsun`
+- `minimum margin 5 faiz olsun`
+- `minimum profit 0.5 dollar olsun`
+- `risk tolerance 40 olsun`
+- `test mode aktiv et`
 - `mənə bu gün nə etdiyini report ver`
 - `list olunmayan məhsullar niyə reject oldu?`
 - `safe olan 5 draftı sandbox ebaydə publish elə`

@@ -41,6 +41,9 @@ export function ProductTable({
                 Risk
               </th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-ink-500 dark:text-ink-400">
+                Latest analysis
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-ink-500 dark:text-ink-400">
                 Supply
               </th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-ink-500 dark:text-ink-400">
@@ -70,6 +73,18 @@ export function ProductTable({
                   </td>
                   <td className="px-4 py-4">
                     <RiskScore score={analysis.riskScore} />
+                  </td>
+                  <td className="px-4 py-4 text-sm text-ink-600 dark:text-ink-300">
+                    <p className="font-medium text-ink-950 dark:text-white">
+                      Rec. ${analysis.recommendedEbayPrice.toFixed(2)}
+                    </p>
+                    <p>Final score {analysis.finalScore}</p>
+                    <p>{analysis.approvedForListing ? "Approved" : "Rejected"}</p>
+                    {analysis.rejectionReasons.length ? (
+                      <p className="mt-2 max-w-xs text-xs text-coral-700 dark:text-coral-300">
+                        {analysis.rejectionReasons.slice(0, 2).join(" ")}
+                      </p>
+                    ) : null}
                   </td>
                   <td className="px-4 py-4 text-sm text-ink-600 dark:text-ink-300">
                     <p>{product.stockQuantity} in stock</p>

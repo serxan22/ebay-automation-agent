@@ -1,0 +1,4 @@
+title,description,supplier_sku,brand,category,supplier_price,shipping_cost,stock_quantity,product_url,image_url_1,shipping_days,country,currency
+Adjustable LED Desk Lamp,Modern adjustable LED desk lamp for home office and study,SKU-P001,Generic,Home Office,5.00,2.00,50,https://example.com/lamp,https://picsum.photos/900/900,3,US,USD
+Kitchen Storage Organizer,Multi-layer kitchen storage organizer rack for cabinets and countertops,SKU-P002,Generic,Kitchen,6.00,2.50,40,https://example.com/rack,https://picsum.photos/901/901,4,US,USD
+Adjustable Phone Stand,Universal adjustable phone stand for desk office and video calls,SKU-P003,Generic,Accessories,1.50,1.00,100,https://example.com/stand,https://picsum.photos/902/902,3,US,USD

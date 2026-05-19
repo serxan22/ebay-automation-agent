@@ -78,6 +78,9 @@ export function buildTelegramReply(intent: TelegramIntent, result: AgentTaskResu
     intent.intent === "SHOW_FAILED_TASKS" ||
     intent.intent === "CHANGE_DAILY_LIMIT" ||
     intent.intent === "CHANGE_MIN_MARGIN" ||
+    intent.intent === "CHANGE_MIN_PROFIT" ||
+    intent.intent === "CHANGE_RISK_TOLERANCE" ||
+    intent.intent === "ENABLE_TEST_MODE" ||
     intent.intent === "UPDATE_BLOCKED_CATEGORY" ||
     intent.intent === "UPDATE_BLOCKED_BRAND" ||
     intent.intent === "CHANGE_APPROVAL_MODE" ||
