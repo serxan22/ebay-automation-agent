@@ -1,18 +1,23 @@
 import { classifyEbayError, EbayIntegrationError, getEbayErrorRecommendation, stringifyEbayPayload } from "@/lib/ebay/errors";
+import { getOptionalEnv } from "@/lib/utils/env";
 
 export interface EbayConfig {
   clientId: string;
   clientSecret: string;
-  redirectUri: string;
+  redirectUri?: string;
+  runame?: string;
+  oauthRedirectUri: string;
+  redirectUriMode: "runame" | "url";
   environment: "sandbox" | "production";
   marketplaceId: string;
 }
 
 export function getEbayConfig(): EbayConfig {
-  const clientId = process.env.EBAY_CLIENT_ID;
-  const clientSecret = process.env.EBAY_CLIENT_SECRET;
-  const redirectUri = process.env.EBAY_REDIRECT_URI;
-  const requestedEnvironment = process.env.EBAY_ENVIRONMENT ?? "sandbox";
+  const clientId = getOptionalEnv("EBAY_CLIENT_ID");
+  const clientSecret = getOptionalEnv("EBAY_CLIENT_SECRET");
+  const redirectUri = getOptionalEnv("EBAY_REDIRECT_URI");
+  const runame = getOptionalEnv("EBAY_RUNAME");
+  const requestedEnvironment = getOptionalEnv("EBAY_ENVIRONMENT") ?? "sandbox";
 
   if (requestedEnvironment === "production") {
     throw new EbayIntegrationError(
@@ -22,11 +27,26 @@ export function getEbayConfig(): EbayConfig {
     );
   }
 
-  if (!clientId || !clientSecret || !redirectUri) {
+  const missingCredentials = [
+    !clientId ? "EBAY_CLIENT_ID" : null,
+    !clientSecret ? "EBAY_CLIENT_SECRET" : null
+  ].filter((name): name is string => Boolean(name));
+
+  if (!clientId || !clientSecret) {
     throw new EbayIntegrationError(
-      "eBay OAuth environment variables are not configured.",
+      `eBay sandbox OAuth credentials are missing: ${missingCredentials.join(", ")}.`,
       "MISSING_EBAY_ENV",
-      "Add EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, and EBAY_REDIRECT_URI."
+      "Add EBAY_CLIENT_ID and EBAY_CLIENT_SECRET from your eBay sandbox application."
+    );
+  }
+
+  const oauthRedirectUri = runame ?? redirectUri;
+
+  if (!oauthRedirectUri) {
+    throw new EbayIntegrationError(
+      "eBay OAuth redirect configuration is missing.",
+      "MISSING_EBAY_ENV",
+      "Add EBAY_RUNAME from the eBay Developer portal. EBAY_REDIRECT_URI can be used only as a fallback callback URL."
     );
   }
 
@@ -34,9 +54,18 @@ export function getEbayConfig(): EbayConfig {
     clientId,
     clientSecret,
     redirectUri,
+    runame,
+    oauthRedirectUri,
+    redirectUriMode: runame ? "runame" : "url",
     environment: "sandbox",
     marketplaceId: process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US"
   };
+}
+
+export function getEbayRunameWarning() {
+  return getOptionalEnv("EBAY_RUNAME")
+    ? null
+    : "EBAY_RUNAME is not configured. eBay OAuth expects the RuName as redirect_uri; the app will fall back to EBAY_REDIRECT_URI, but sandbox OAuth may fail with invalid_request until EBAY_RUNAME is set.";
 }
 
 export function getEbayApiBaseUrl(environment: "sandbox" | "production") {

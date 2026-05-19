@@ -3,6 +3,7 @@ import { EbayConnectPanel } from "@/components/ebay/EbayConnectPanel";
 import { SettingsSection } from "@/components/settings/SettingsSection";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { getEbayAccount } from "@/lib/ebay/account";
+import { getEbayRunameWarning } from "@/lib/ebay/client";
 import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
 
 export default async function SettingsPage({
@@ -27,6 +28,7 @@ export default async function SettingsPage({
 
       <EbayConnectPanel
         statusMessage={statusMessage}
+        warningMessage={getEbayRunameWarning()}
         connected={account?.status === "connected"}
         paymentPolicy={account?.payment_policy_name ?? account?.payment_policy_id}
         returnPolicy={account?.return_policy_name ?? account?.return_policy_id}

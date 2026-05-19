@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 
 interface EbayConnectPanelProps {
   statusMessage?: string;
+  warningMessage?: string | null;
   connected: boolean;
   paymentPolicy?: string | null;
   returnPolicy?: string | null;
@@ -15,6 +16,7 @@ interface EbayConnectPanelProps {
 
 export function EbayConnectPanel({
   statusMessage,
+  warningMessage,
   connected,
   paymentPolicy,
   returnPolicy,
@@ -93,6 +95,12 @@ export function EbayConnectPanel({
           <MapPin size={16} /> {busy === "location" ? "Checking..." : "Setup location"}
         </Button>
       </div>
+
+      {warningMessage ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
+          {warningMessage}
+        </div>
+      ) : null}
 
       {message ? (
         <div className="mt-4 rounded-md border border-ink-200 bg-ink-50 p-3 text-sm text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200">

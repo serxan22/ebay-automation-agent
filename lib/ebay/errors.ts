@@ -14,7 +14,7 @@ export class EbayIntegrationError extends Error {
 export function getEbayErrorRecommendation(code: string) {
   const recommendations: Record<string, string> = {
     PRODUCTION_DISABLED: "Use eBay sandbox credentials and EBAY_ENVIRONMENT=sandbox for Phase 2.",
-    MISSING_EBAY_ENV: "Add eBay sandbox client ID, client secret, and redirect URI to your environment.",
+    MISSING_EBAY_ENV: "Add eBay sandbox client ID, client secret, RuName, and callback URL to your environment.",
     TOKEN_EXPIRED: "Reconnect eBay or refresh the OAuth token before publishing.",
     MISSING_POLICY_ID: "Go to eBay settings and select payment, return, and fulfillment policies.",
     MISSING_LOCATION: "Create or select an eBay inventory location key.",

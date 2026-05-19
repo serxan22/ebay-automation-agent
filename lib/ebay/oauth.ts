@@ -1,4 +1,3 @@
-import { getAppUrl } from "@/lib/utils/env";
 import { getEbayApiBaseUrl, getEbayConfig } from "@/lib/ebay/client";
 
 const scopes = [
@@ -16,10 +15,20 @@ export function buildEbayOAuthUrl(state: string) {
       : "https://auth.sandbox.ebay.com/oauth2/authorize";
   const url = new URL(authBase);
   url.searchParams.set("client_id", config.clientId);
-  url.searchParams.set("redirect_uri", config.redirectUri);
+  url.searchParams.set("redirect_uri", config.oauthRedirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", scopes.join(" "));
   url.searchParams.set("state", state);
+
+  console.info("[ebay_oauth] authorization_url_params", {
+    environment: config.environment,
+    marketplace: config.marketplaceId,
+    hasClientId: Boolean(config.clientId),
+    hasRuname: Boolean(config.runame),
+    redirectUriMode: config.redirectUriMode,
+    scopesCount: scopes.length
+  });
+
   return url.toString();
 }
 
@@ -39,7 +48,7 @@ export async function exchangeEbayCodeForTokens(code: string) {
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code,
-      redirect_uri: config.redirectUri || `${getAppUrl()}/api/ebay/oauth/callback`
+      redirect_uri: config.oauthRedirectUri
     })
   });
 
