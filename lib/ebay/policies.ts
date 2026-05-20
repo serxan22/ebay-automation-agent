@@ -3,6 +3,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getValidEbayAccessToken, type EbayAccountRecord } from "@/lib/ebay/account";
 import { EbayIntegrationError, getEbayErrorRecommendation } from "@/lib/ebay/errors";
+import {
+  discoverShippingServicesWithFallback,
+  getPreferredDomesticShippingServices,
+  inferShippingCarrierCode,
+  type EbayShippingService
+} from "@/lib/ebay/shipping-services";
 
 export interface SellerPolicy {
   name: string;
@@ -48,68 +54,17 @@ const defaultPolicyNames = {
   return: "Default Sandbox Return Policy",
   fulfillment: "Default Sandbox Fulfillment Policy"
 };
-const fulfillmentShippingAttempts = [
-  {
-    attemptNumber: 1,
-    shippingServiceCode: "USPSPriorityFlatRateBox",
-    shippingCarrierCode: "USPS",
-    includeShippingCost: false,
-    freeShipping: true,
-    buyerResponsibleForShipping: false
-  },
-  {
-    attemptNumber: 2,
-    shippingServiceCode: "USPSPriorityFlatRateBox",
-    shippingCarrierCode: "USPS",
-    includeShippingCost: true,
-    freeShipping: true,
-    buyerResponsibleForShipping: false,
-    shippingCostValue: "0.0",
-    additionalShippingCostValue: "0.0"
-  },
-  {
-    attemptNumber: 3,
-    shippingServiceCode: "USPSPriority",
-    shippingCarrierCode: "USPS",
-    includeShippingCost: false,
-    freeShipping: true,
-    buyerResponsibleForShipping: false
-  },
-  {
-    attemptNumber: 4,
-    shippingServiceCode: "USPSParcel",
-    shippingCarrierCode: "USPS",
-    includeShippingCost: false,
-    freeShipping: true,
-    buyerResponsibleForShipping: false
-  },
-  {
-    attemptNumber: 5,
-    shippingServiceCode: "USPSGround",
-    shippingCarrierCode: "USPS",
-    includeShippingCost: false,
-    freeShipping: true,
-    buyerResponsibleForShipping: false
-  },
-  {
-    attemptNumber: 6,
-    shippingServiceCode: "UPSGround",
-    shippingCarrierCode: "UPS",
-    includeShippingCost: false,
-    freeShipping: true,
-    buyerResponsibleForShipping: false
-  },
-  {
-    attemptNumber: 7,
-    shippingServiceCode: "USPSPriority",
-    shippingCarrierCode: "USPS",
-    includeShippingCost: true,
-    freeShipping: false,
-    buyerResponsibleForShipping: true,
-    shippingCostValue: "5.00",
-    additionalShippingCostValue: "0.00"
-  }
-];
+interface FulfillmentPolicyAttempt {
+  attemptNumber: number;
+  schema: "official_string_free" | "boolean_zero_cost" | "buyer_paid_flat_rate";
+  shippingServiceCode: string;
+  shippingCarrierCode: string;
+  includeShippingCost: boolean;
+  freeShipping: boolean | "true" | "false";
+  buyerResponsibleForShipping: boolean | "true" | "false";
+  shippingCostValue?: string;
+  additionalShippingCostValue?: string;
+}
 
 export async function getFulfillmentPolicies(accessToken: string, marketplaceId = "EBAY_US") {
   return ebayFetch<{ fulfillmentPolicies: SellerPolicy[] }>({
@@ -204,8 +159,18 @@ export async function createDefaultFulfillmentPolicy({
   userId: string;
 }) {
   let lastError: unknown;
+  const discovery = await discoverShippingServicesWithFallback(accessToken);
+  const candidates = getPreferredDomesticShippingServices(discovery.services);
+  const attempts = buildFulfillmentPolicyAttempts(candidates);
+  const failedAttempts: Array<{
+    attemptNumber: number;
+    shippingServiceCode: string;
+    schema: string;
+    shippingCostIncluded: boolean;
+    ebayErrors: ReturnType<typeof extractEbayErrorSummaries>;
+  }> = [];
 
-  for (const attempt of fulfillmentShippingAttempts) {
+  for (const attempt of attempts) {
     await logAutomationEvent({
       supabase,
       userId,
@@ -218,8 +183,11 @@ export async function createDefaultFulfillmentPolicy({
         shippingServiceCode: attempt.shippingServiceCode,
         shippingCarrierCode: attempt.shippingCarrierCode,
         shippingCostIncluded: attempt.includeShippingCost,
+        schema: attempt.schema,
         freeShipping: attempt.freeShipping,
-        buyerResponsibleForShipping: attempt.buyerResponsibleForShipping
+        buyerResponsibleForShipping: attempt.buyerResponsibleForShipping,
+        discoveryUsed: discovery.discovered,
+        discoveryError: discovery.discoveryError
       }
     });
 
@@ -233,6 +201,14 @@ export async function createDefaultFulfillmentPolicy({
       });
     } catch (error) {
       lastError = error;
+      const ebayErrors = extractEbayErrorSummaries(error);
+      failedAttempts.push({
+        attemptNumber: attempt.attemptNumber,
+        shippingServiceCode: attempt.shippingServiceCode,
+        schema: attempt.schema,
+        shippingCostIncluded: attempt.includeShippingCost,
+        ebayErrors
+      });
       await logAutomationEvent({
         supabase,
         userId,
@@ -245,7 +221,9 @@ export async function createDefaultFulfillmentPolicy({
           shippingServiceCode: attempt.shippingServiceCode,
           shippingCarrierCode: attempt.shippingCarrierCode,
           shippingCostIncluded: attempt.includeShippingCost,
-          ebayErrors: extractEbayErrorSummaries(error)
+          schema: attempt.schema,
+          discoveryUsed: discovery.discovered,
+          ebayErrors
         }
       });
 
@@ -255,7 +233,20 @@ export async function createDefaultFulfillmentPolicy({
     }
   }
 
-  throw lastError;
+  const summary = summarizePolicyCreateError(lastError);
+  throw new EbayIntegrationError(
+    "Fulfillment policy creation failed after trying discovered and fallback shipping services.",
+    summary.code,
+    summary.recommendation,
+    {
+      attempts: failedAttempts,
+      attemptedShippingServices: Array.from(new Set(failedAttempts.map((attempt) => attempt.shippingServiceCode))),
+      discoveryUsed: discovery.discovered,
+      discoveryFailed: !discovery.discovered,
+      discoveryError: discovery.discoveryError,
+      lastError: summary.details
+    }
+  );
 }
 
 export async function createDefaultSellerPolicies({
@@ -333,8 +324,7 @@ export async function createDefaultSellerPolicies({
       });
       await logDefaultPolicyCreated(supabase, userId, "ebay_default_fulfillment_policy_created", marketplaceId, {
         policyId: created.fulfillmentPolicy.fulfillmentPolicyId,
-        policyName: created.fulfillmentPolicy.name,
-        attemptedShippingServices: fulfillmentShippingAttempts.map((attempt) => attempt.shippingServiceCode)
+        policyName: created.fulfillmentPolicy.name
       });
     } catch (error) {
       errors.fulfillmentPolicy = summarizePolicyCreateError(error);
@@ -346,7 +336,6 @@ export async function createDefaultSellerPolicies({
         message: "ebay_default_fulfillment_policy_failed",
         metadata: {
           marketplaceId,
-          attemptedShippingServices: fulfillmentShippingAttempts.map((attempt) => attempt.shippingServiceCode),
           error: errors.fulfillmentPolicy.message,
           code: errors.fulfillmentPolicy.code,
           details: errors.fulfillmentPolicy.details
@@ -531,7 +520,7 @@ export function chooseDefaultPolicy<T extends SellerPolicy>(policies: T[] = [], 
 
 function buildDefaultFulfillmentPolicyBody(
   marketplaceId: string,
-  attempt: (typeof fulfillmentShippingAttempts)[number]
+  attempt: FulfillmentPolicyAttempt
 ) {
   const shippingService: Record<string, unknown> = {
     buyerResponsibleForShipping: attempt.buyerResponsibleForShipping,
@@ -568,6 +557,57 @@ function buildDefaultFulfillmentPolicyBody(
     ],
     globalShipping: false
   };
+}
+
+function buildFulfillmentPolicyAttempts(candidates: EbayShippingService[]): FulfillmentPolicyAttempt[] {
+  const usableCandidates = candidates.length
+    ? candidates
+    : [
+        { shippingService: "USPSPriorityFlatRateBox" },
+        { shippingService: "USPSPriority" },
+        { shippingService: "USPSGroundAdvantage" },
+        { shippingService: "USPSParcel" },
+        { shippingService: "UPSGround" },
+        { shippingService: "FedExGround" }
+      ];
+  const attempts: FulfillmentPolicyAttempt[] = [];
+
+  for (const candidate of usableCandidates) {
+    attempts.push({
+      attemptNumber: attempts.length + 1,
+      schema: "official_string_free",
+      shippingServiceCode: candidate.shippingService,
+      shippingCarrierCode: inferShippingCarrierCode(candidate.shippingService),
+      includeShippingCost: false,
+      freeShipping: "true",
+      buyerResponsibleForShipping: "false"
+    });
+    attempts.push({
+      attemptNumber: attempts.length + 1,
+      schema: "boolean_zero_cost",
+      shippingServiceCode: candidate.shippingService,
+      shippingCarrierCode: inferShippingCarrierCode(candidate.shippingService),
+      includeShippingCost: true,
+      freeShipping: true,
+      buyerResponsibleForShipping: false,
+      shippingCostValue: "0.00",
+      additionalShippingCostValue: "0.00"
+    });
+  }
+
+  attempts.push({
+    attemptNumber: attempts.length + 1,
+    schema: "buyer_paid_flat_rate",
+    shippingServiceCode: "USPSPriority",
+    shippingCarrierCode: "USPS",
+    includeShippingCost: true,
+    freeShipping: false,
+    buyerResponsibleForShipping: true,
+    shippingCostValue: "5.00",
+    additionalShippingCostValue: "0.00"
+  });
+
+  return attempts;
 }
 
 function buildStoredPolicyFallback(
@@ -637,7 +677,7 @@ function buildDefaultPolicyStatus(
     returnPolicy: buildPolicyStatus(policies.returnPolicy, Boolean(created.returnPolicy), errors.returnPolicy),
     fulfillmentPolicy: {
       ...buildPolicyStatus(policies.fulfillmentPolicy, Boolean(created.fulfillmentPolicy), errors.fulfillmentPolicy),
-      attemptedShippingServices: fulfillmentShippingAttempts.map((attempt) => attempt.shippingServiceCode)
+      attemptedShippingServices: extractAttemptedShippingServices(errors.fulfillmentPolicy)
     }
   };
 }
@@ -729,12 +769,20 @@ function summarizePolicyCreateError(error: unknown): PolicyCreateErrorSummary {
       error.code === "INVALID_SHIPPING_SERVICE"
         ? "Invalid shipping service code for fulfillment policy. The app will retry with another sandbox-safe service."
         : error.message;
+    const attemptedShippingServices = extractAttemptedShippingServicesFromDetails(error.details);
 
     return {
       code: error.code,
       message,
       recommendation: error.recommendation ?? getEbayErrorRecommendation(error.code),
-      details: error.details ? { ebay: error.details, status: error.status } : { status: error.status }
+      details: error.details
+        ? {
+            ebay: error.details,
+            status: error.status,
+            attemptedShippingServices,
+            discoveryFailed: hasDiscoveryFailure(error.details)
+          }
+        : { status: error.status, attemptedShippingServices }
     };
   }
 
@@ -743,6 +791,34 @@ function summarizePolicyCreateError(error: unknown): PolicyCreateErrorSummary {
     message: error instanceof Error ? error.message : "Seller policy creation failed.",
     recommendation: getEbayErrorRecommendation("PUBLISH_FAILED")
   };
+}
+
+function extractAttemptedShippingServicesFromDetails(details: unknown) {
+  if (!details || typeof details !== "object" || !("attempts" in details)) {
+    return [];
+  }
+
+  const attempts = (details as { attempts?: unknown }).attempts;
+
+  if (!Array.isArray(attempts)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      attempts
+        .map((attempt) =>
+          attempt && typeof attempt === "object"
+            ? (attempt as { shippingServiceCode?: unknown }).shippingServiceCode
+            : null
+        )
+        .filter((value): value is string => typeof value === "string")
+    )
+  );
+}
+
+function hasDiscoveryFailure(details: unknown) {
+  return Boolean(details && typeof details === "object" && "discoveryFailed" in details && (details as { discoveryFailed?: unknown }).discoveryFailed);
 }
 
 function extractEbayErrorSummaries(error: unknown) {
@@ -778,6 +854,22 @@ function extractEbayErrorSummaries(error: unknown) {
         : undefined
     };
   });
+}
+
+function extractAttemptedShippingServices(error?: PolicyCreateErrorSummary) {
+  if (!error?.details || typeof error.details !== "object") {
+    return [];
+  }
+
+  const ebayDetails = "ebay" in error.details ? (error.details as { ebay?: unknown }).ebay : error.details;
+
+  if (!ebayDetails || typeof ebayDetails !== "object" || !("attemptedShippingServices" in ebayDetails)) {
+    return [];
+  }
+
+  const attempted = (ebayDetails as { attemptedShippingServices?: unknown }).attemptedShippingServices;
+
+  return Array.isArray(attempted) ? attempted.filter((value): value is string => typeof value === "string") : [];
 }
 
 async function logDefaultPolicyCreated(

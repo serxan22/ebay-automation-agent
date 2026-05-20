@@ -37,6 +37,19 @@ interface ProgramStatus {
 
 type MessageTone = "success" | "error" | "warning";
 
+interface ShippingServiceSummary {
+  shippingService: string;
+  description?: string;
+  internationalService?: boolean;
+  validForSellingFlow?: boolean;
+}
+
+interface PolicyAttemptDetails {
+  errors?: Record<string, unknown>;
+  policyStatus?: Record<string, { status: string; error?: string; attemptedShippingServices?: string[] }>;
+  missing?: string[];
+}
+
 export function EbayConnectPanel({
   statusMessage,
   statusTone = "success",
@@ -59,6 +72,8 @@ export function EbayConnectPanel({
   const [busy, setBusy] = useState<"policies" | "createDefaults" | "location" | "disconnect" | "optIn" | null>(null);
   const [programStatus, setProgramStatus] = useState<ProgramStatus | null>(null);
   const [programLoading, setProgramLoading] = useState(false);
+  const [shippingServices, setShippingServices] = useState<ShippingServiceSummary[] | null>(null);
+  const [policyAttemptDetails, setPolicyAttemptDetails] = useState<PolicyAttemptDetails | null>(null);
   const hasAllSellerPolicies = Boolean(paymentPolicy && returnPolicy && fulfillmentPolicy);
   const canCreateDefaultPolicies =
     connected && Boolean(programStatus?.sellingPolicyManagement?.active) && !hasAllSellerPolicies;
@@ -188,6 +203,8 @@ export function EbayConnectPanel({
       error?: string;
       recommendation?: string;
       policyStatus?: Record<string, { status: string; error?: string }>;
+      errors?: Record<string, unknown>;
+      missing?: string[];
     };
 
     setBusy(null);
@@ -197,10 +214,45 @@ export function EbayConnectPanel({
         ? `${payload.message ?? "Default sandbox seller policies created and synced."}${formatPolicyStatus(payload.policyStatus)}`
         : joinErrorAndRecommendation(payload.error ?? "Default seller policy creation failed.", payload.recommendation)
     );
+    setPolicyAttemptDetails({
+      errors: payload.errors,
+      policyStatus: payload.policyStatus,
+      missing: payload.missing
+    });
 
     if (payload.ok) {
       router.refresh();
     }
+  }
+
+  async function discoverShippingServices() {
+    setBusy("policies");
+    setMessage("");
+
+    const response = await fetch("/api/ebay/shipping-services");
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      discoverySucceeded?: boolean;
+      discoveredServicesCount?: number;
+      services?: ShippingServiceSummary[];
+      fallbackServices?: ShippingServiceSummary[];
+      error?: string;
+      discoveryError?: string | null;
+    };
+    const services = (payload.services?.length ? payload.services : payload.fallbackServices ?? []).filter(
+      (service) => service.internationalService !== true && service.validForSellingFlow !== false
+    );
+
+    setBusy(null);
+    setShippingServices(services.slice(0, 12));
+    setMessageTone(response.ok ? (payload.discoverySucceeded ? "success" : "warning") : "error");
+    setMessage(
+      response.ok
+        ? payload.discoverySucceeded
+          ? `Discovered ${payload.discoveredServicesCount ?? services.length} eBay shipping services.`
+          : `Shipping service discovery used fallback services. ${payload.discoveryError ?? ""}`.trim()
+        : payload.error ?? "Shipping service discovery failed."
+    );
   }
 
   async function disconnect() {
@@ -280,7 +332,21 @@ export function EbayConnectPanel({
             onClick={createDefaultSellerPolicies}
             disabled={busy !== null || programLoading}
           >
-            <Building2 size={16} /> {busy === "createDefaults" ? "Creating..." : "Create default seller policies"}
+            <Building2 size={16} />{" "}
+            {busy === "createDefaults"
+              ? "Creating..."
+              : paymentPolicy && returnPolicy && !fulfillmentPolicy
+                ? "Retry fulfillment policy"
+                : "Create default seller policies"}
+          </Button>
+        ) : null}
+        {connected ? (
+          <Button
+            variant="secondary"
+            onClick={discoverShippingServices}
+            disabled={busy !== null || programLoading}
+          >
+            <RefreshCcw size={16} /> Discover shipping services
           </Button>
         ) : null}
         <Button
@@ -300,6 +366,8 @@ export function EbayConnectPanel({
       </div>
 
       {showManualFulfillmentFallback ? <ManualFulfillmentFallback /> : null}
+      {shippingServices?.length ? <ShippingServicesPanel services={shippingServices} /> : null}
+      {policyAttemptDetails ? <PolicyAttemptDetailsPanel details={policyAttemptDetails} /> : null}
 
       {warningMessage ? (
         <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
@@ -315,32 +383,66 @@ export function EbayConnectPanel({
 
 function ManualFulfillmentFallback() {
   return (
-    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
+    <div className="mt-4 rounded-md border border-ink-200 bg-ink-50 p-4 text-sm text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200">
       <p className="font-semibold">
-        Payment and return policies are ready, but eBay sandbox rejected automatic fulfillment policy creation.
+        Payment and return policies are ready, but fulfillment policy is still missing.
       </p>
       <p className="mt-2">
-        Create a fulfillment/shipping policy manually in the sandbox seller account, then click Sync seller policies.
+        Use Discover shipping services, then Retry fulfillment policy. If discovery fails too, the fallback instructions below are still available.
       </p>
-      <ol className="mt-3 list-inside list-decimal space-y-1">
-        <li>Open eBay sandbox seller account settings.</li>
-        <li>Go to Business Policies.</li>
-        <li>Create a Shipping/Fulfillment policy.</li>
-        <li>Domestic shipping: USPS Priority or USPS Priority Flat Rate Box.</li>
-        <li>Handling time: 1 day.</li>
-        <li>Use free shipping or flat $5 shipping.</li>
-        <li>Save.</li>
-        <li>Return to the app and click Sync seller policies.</li>
-      </ol>
-      <a
-        href="https://www.sandbox.ebay.com/sh/landing"
-        target="_blank"
-        rel="noreferrer"
-        className="mt-3 inline-flex items-center gap-2 rounded-md bg-ink-950 px-3 py-2 text-xs font-medium text-white hover:bg-ink-800 dark:bg-mint-500 dark:text-ink-950"
-      >
-        <ExternalLink size={14} /> Open sandbox seller settings
-      </a>
     </div>
+  );
+}
+
+function ShippingServicesPanel({ services }: { services: ShippingServiceSummary[] }) {
+  return (
+    <div className="mt-4 rounded-md border border-mint-200 bg-mint-50 p-4 text-sm text-mint-900 dark:border-mint-500/20 dark:bg-mint-500/10 dark:text-mint-100">
+      <p className="font-semibold">Top domestic shipping services</p>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        {services.slice(0, 8).map((service) => (
+          <div key={service.shippingService} className="rounded-md bg-white/70 p-2 dark:bg-white/[0.06]">
+            <p className="font-medium">{service.shippingService}</p>
+            <p className="text-xs opacity-80">{service.description ?? "No description"}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PolicyAttemptDetailsPanel({ details }: { details: PolicyAttemptDetails }) {
+  const text = JSON.stringify(details, null, 2);
+  const discoveryFailed = text.includes('"discoveryFailed": true');
+
+  return (
+    <details className="mt-4 rounded-md border border-ink-200 bg-ink-50 p-4 text-sm text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200">
+      <summary className="cursor-pointer font-semibold">Policy creation details</summary>
+      <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-md bg-ink-950 p-3 text-xs text-white">
+        {text}
+      </pre>
+      {discoveryFailed ? (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
+          <p className="font-semibold">Discovery failed too. Manual fallback:</p>
+          <ol className="mt-2 list-inside list-decimal space-y-1">
+            <li>Open eBay sandbox seller account settings.</li>
+            <li>Go to Business Policies.</li>
+            <li>Create a Shipping/Fulfillment policy.</li>
+            <li>Domestic shipping: USPS Priority or USPS Priority Flat Rate Box.</li>
+            <li>Handling time: 1 day.</li>
+            <li>Use free shipping or flat $5 shipping.</li>
+            <li>Save, return to the app, and click Sync seller policies.</li>
+          </ol>
+          <a
+            href="https://www.sandbox.ebay.com/sh/landing"
+            target="_blank"
+            rel="noreferrer"
+            className="mt-3 inline-flex items-center gap-2 rounded-md bg-ink-950 px-3 py-2 text-xs font-medium text-white hover:bg-ink-800 dark:bg-mint-500 dark:text-ink-950"
+          >
+            <ExternalLink size={14} /> Open sandbox seller settings
+          </a>
+        </div>
+      ) : null}
+    </details>
   );
 }
 

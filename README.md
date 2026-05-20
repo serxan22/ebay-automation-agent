@@ -250,13 +250,16 @@ GET /api/ebay/programs
 POST /api/ebay/programs/opt-in-selling-policies
 POST /api/ebay/policies/create-defaults
 GET /api/ebay/policies/debug
+GET /api/ebay/shipping-services
 ```
 
 `GET /api/ebay/programs` calls `get_opted_in_programs` and reports whether `SELLING_POLICY_MANAGEMENT` is active. `POST /api/ebay/programs/opt-in-selling-policies` calls `program/opt_in` with `{ "programType": "SELLING_POLICY_MANAGEMENT" }`. eBay can take time to activate program opt-in, so wait and check again before retrying policy sync.
 
 Opt-in only enables the Business Policies feature. The sandbox seller still needs actual Payment, Return, and Fulfillment policies before Inventory API offers can be published. `POST /api/ebay/policies/create-defaults` checks existing policies first, creates only the missing defaults for `EBAY_US`, then runs policy sync to save the IDs.
 
-Default fulfillment policy creation starts with the official-style EBAY_US free shipping body using `USPSPriorityFlatRateBox` without explicit shipping costs. If sandbox rejects it, the app retries zero-cost `USPSPriorityFlatRateBox`, free `USPSPriority`, free `USPSParcel`, free `USPSGround`, free `UPSGround`, and buyer-paid `USPSPriority` with flat $5 shipping. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
+The sandbox seller UI may not expose Business Policies reliably, so the app does not depend on manual policy screens. `GET /api/ebay/shipping-services` calls the Trading API `GeteBayDetails` with `ShippingServiceDetails` using the connected seller token, then returns safe EBAY_US shipping service diagnostics. Fulfillment policy creation prefers discovered domestic services that are valid for selling flow, with fallback candidates if discovery fails.
+
+Default fulfillment policy creation tries discovered EBAY_US services first. It uses the official-style free-shipping schema without explicit shipping costs, then a boolean zero-cost schema, and finally a buyer-paid `USPSPriority` flat `$5` fallback. Preferred service codes include `USPSPriorityFlatRateBox`, `USPSPriority`, `USPSGroundAdvantage`, `USPSParcel`, `UPSGround`, and `FedExGround`. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
 
 `GET /api/ebay/policies/debug` returns safe policy diagnostics for the signed-in user: connection status, Business Policies status, policy counts, policy names/IDs, and stored account policy IDs. It never returns OAuth tokens.
 
@@ -284,8 +287,8 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 - Callback not saving tokens: run `sql/phase4_ebay_oauth_states.sql` and confirm `SUPABASE_SERVICE_ROLE_KEY` and `ENCRYPTION_SECRET` exist in Vercel.
 - `20403 User is not eligible for Business Policy`: the sandbox seller is not opted into `SELLING_POLICY_MANAGEMENT`. Click `Enable seller policies`, wait for eBay to activate the program if needed, then click `Sync seller policies` again.
 - No policies found: Business Policies are active, but no payment, return, and fulfillment policies exist yet. Click `Create default seller policies`, or create the policies manually in seller settings, then sync again.
-- Payment/return created but fulfillment missing: eBay sandbox can reject Account API shipping services or return an internal application error even when Business Policies are active. Click `Create default seller policies` again to retry, or create a Shipping/Fulfillment policy manually in sandbox seller settings and then click `Sync seller policies`.
-- Invalid shipping service code: sandbox rejected the fulfillment policy shipping service. The app attempts `USPSPriorityFlatRateBox`, `USPSPriority`, `USPSParcel`, `USPSGround`, `UPSGround`, and a buyer-paid `USPSPriority` fallback while keeping any payment/return policies already created.
+- Payment/return created but fulfillment missing: eBay sandbox can reject Account API shipping services or return an internal application error even when Business Policies are active. Click `Discover shipping services`, then `Retry fulfillment policy`.
+- Invalid shipping service code: sandbox rejected the fulfillment policy shipping service. The app discovers valid EBAY_US services first, then tries official-style free shipping and boolean zero-cost schemas while keeping any payment/return policies already created.
 - Missing inventory location: click `Setup location` in Settings.
 - Invalid category/aspects: revise the draft category ID and item specifics JSON.
 - Image error: use publicly accessible HTTP/HTTPS image URLs; HTTPS is recommended.
@@ -299,12 +302,12 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 5. In Supabase, verify `public.ebay_accounts` has one connected row for the user.
 6. Confirm `Business policies` is `Active`, or click `Enable seller policies` and wait if eBay needs time to activate `SELLING_POLICY_MANAGEMENT`.
 7. Click `Sync seller policies`.
-8. If no policy IDs are found, click `Create default seller policies`, then confirm payment, return, and fulfillment policy names appear.
+8. If no policy IDs are found, click `Create default seller policies`. If only fulfillment is missing, click `Discover shipping services`, then `Retry fulfillment policy`.
 9. Click `Setup location`.
 10. Create or revise a listing draft until readiness is green, then approve it.
 11. Click `Publish sandbox`.
 
-Manual sandbox setup may still be required inside eBay if the Account API rejects every default fulfillment shipping code. In sandbox seller settings, go to Business Policies, create a Shipping/Fulfillment policy, choose domestic USPS Priority or USPS Priority Flat Rate Box, set handling time to 1 day, choose free shipping or flat $5 shipping, save, then return to the app and click `Sync seller policies`. After opt-in, the normal path is Settings → `Create default seller policies`, Settings → `Setup location`, Listings → approve draft, Listings → `Publish sandbox`.
+Manual sandbox setup is a last resort only if shipping-service discovery also fails and eBay still rejects all Account API fulfillment policy attempts. The normal path is Settings → `Discover shipping services` → `Retry fulfillment policy` → `Setup location`, Listings → approve draft, Listings → `Publish sandbox`.
 
 ## Telegram Bot
 

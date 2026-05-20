@@ -28,6 +28,7 @@ export async function POST() {
         : "Default sandbox seller policies created and synced.",
       created: result.created,
       policyStatus: result.policyStatus,
+      errors: result.errors,
       missing: result.missing,
       policies: result.policies,
       account: result.account
@@ -83,10 +84,9 @@ function buildPartialPolicyMessage(
 
   if (missing.includes("fulfillment policy") && hasPaymentAndReturn) {
     return [
-      "Payment and return policies are ready, but eBay sandbox rejected automatic fulfillment policy creation.",
-      "Create a fulfillment/shipping policy manually in the sandbox seller account, then click Sync seller policies.",
+      "Payment and return policies are ready, but fulfillment policy creation is still failing.",
       fulfillmentError ? `Last fulfillment error: ${fulfillmentError}` : "",
-      "You can also click Create default seller policies again to retry the missing policy.",
+      "Click Discover shipping services, then Retry fulfillment policy.",
       createdOrStored.length ? `Current policies: ${createdOrStored.join("; ")}.` : ""
     ]
       .filter(Boolean)
