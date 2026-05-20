@@ -19,13 +19,20 @@ export async function POST() {
       userId,
       marketplaceId: "EBAY_US"
     });
+    const paymentPolicyStored = Boolean(result.policies.paymentPolicy);
+    const returnPolicyStored = Boolean(result.policies.returnPolicy);
+    const fulfillmentPolicyStored = Boolean(result.policies.fulfillmentPolicy);
 
     return NextResponse.json({
-      ok: true,
+      ok: !result.partial,
       partial: result.partial,
+      paymentPolicyStored,
+      returnPolicyStored,
+      fulfillmentPolicyStored,
       message: result.partial
         ? buildPartialPolicyMessage(result.missing, result.policyStatus)
         : "Default sandbox seller policies created and synced.",
+      attempts: extractAttemptsFromPolicyError(result.errors.fulfillmentPolicy),
       created: result.created,
       policyStatus: result.policyStatus,
       errors: result.errors,
@@ -61,13 +68,35 @@ export async function POST() {
     return NextResponse.json(
       {
         ok: false,
+        partial: false,
+        paymentPolicyStored: false,
+        returnPolicyStored: false,
+        fulfillmentPolicyStored: false,
         error: normalized.message,
+        message: normalized.message,
         code: normalized.code,
-        recommendation: normalized.recommendation
+        recommendation: normalized.recommendation,
+        attempts: []
       },
       { status: 400 }
     );
   }
+}
+
+function extractAttemptsFromPolicyError(error?: { details?: unknown }) {
+  if (!error?.details || typeof error.details !== "object") {
+    return [];
+  }
+
+  const ebayDetails = "ebay" in error.details ? (error.details as { ebay?: unknown }).ebay : error.details;
+
+  if (!ebayDetails || typeof ebayDetails !== "object" || !("attempts" in ebayDetails)) {
+    return [];
+  }
+
+  const attempts = (ebayDetails as { attempts?: unknown }).attempts;
+
+  return Array.isArray(attempts) ? attempts : [];
 }
 
 function buildPartialPolicyMessage(

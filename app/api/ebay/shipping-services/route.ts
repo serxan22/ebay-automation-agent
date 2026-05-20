@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getValidEbayAccessToken } from "@/lib/ebay/account";
-import { discoverShippingServicesWithFallback } from "@/lib/ebay/shipping-services";
+import { discoverShippingServicesWithFallback, getPreferredDomesticShippingServices } from "@/lib/ebay/shipping-services";
 import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 
 export async function GET() {
@@ -13,6 +13,7 @@ export async function GET() {
       marketplace
     });
     const discovery = await discoverShippingServicesWithFallback(accessToken);
+    const preferredServices = getPreferredDomesticShippingServices(discovery.services);
 
     return NextResponse.json({
       ok: true,
@@ -21,7 +22,7 @@ export async function GET() {
       discoveryError: discovery.discoveryError,
       discoveredServicesCount: discovery.discovered ? discovery.services.length : 0,
       services: discovery.discovered
-        ? discovery.services.map((service) => ({
+        ? preferredServices.map((service) => ({
             shippingService: service.shippingService,
             description: service.description,
             internationalService: service.internationalService,

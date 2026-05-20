@@ -249,6 +249,7 @@ The settings page can check eBay Account API programs through:
 GET /api/ebay/programs
 POST /api/ebay/programs/opt-in-selling-policies
 POST /api/ebay/policies/create-defaults
+POST /api/ebay/policies/retry-fulfillment
 GET /api/ebay/policies/debug
 GET /api/ebay/shipping-services
 ```
@@ -259,9 +260,9 @@ Opt-in only enables the Business Policies feature. The sandbox seller still need
 
 The sandbox seller UI may not expose Business Policies reliably, so the app does not depend on manual policy screens. `GET /api/ebay/shipping-services` calls the Trading API `GeteBayDetails` with `ShippingServiceDetails` using the connected seller token, then returns safe EBAY_US shipping service diagnostics. Fulfillment policy creation prefers discovered domestic services that are valid for selling flow, with fallback candidates if discovery fails.
 
-Default fulfillment policy creation tries discovered EBAY_US services first. It uses the official-style free-shipping schema without explicit shipping costs, then a boolean zero-cost schema, and finally a buyer-paid `USPSPriority` flat `$5` fallback. Preferred service codes include `USPSPriorityFlatRateBox`, `USPSPriority`, `USPSGroundAdvantage`, `USPSParcel`, `UPSGround`, and `FedExGround`. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
+Default fulfillment policy creation tries discovered EBAY_US services first and is capped at eight attempts so it returns a visible result instead of hanging. It uses the official-style free-shipping schema without explicit shipping costs, then a boolean zero-cost schema, and finally a buyer-paid `USPSPriority` flat `$5` fallback. Preferred service codes include `USPSFirstClass`, `USPSPriority`, `UPSGround`, `FedExHomeDelivery`, `USPSPriorityFlatRateBox`, `USPSGroundAdvantage`, `USPSParcel`, and `FedExGround`. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
 
-`GET /api/ebay/policies/debug` returns safe policy diagnostics for the signed-in user: connection status, Business Policies status, policy counts, policy names/IDs, and stored account policy IDs. It never returns OAuth tokens.
+If Settings appears stuck on `Creating...`, the client now times out after 25 seconds and resets the active button. Use `Retry fulfillment policy` to call only `POST /api/ebay/policies/retry-fulfillment`, then open `GET /api/ebay/policies/debug` to inspect stored policy IDs, policy counts, fulfillment missing reason, and the latest safe fulfillment attempt logs. It never returns OAuth tokens.
 
 The OAuth callback issue was fixed by using the neutral public app domain and clean callback route:
 
@@ -288,6 +289,7 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 - `20403 User is not eligible for Business Policy`: the sandbox seller is not opted into `SELLING_POLICY_MANAGEMENT`. Click `Enable seller policies`, wait for eBay to activate the program if needed, then click `Sync seller policies` again.
 - No policies found: Business Policies are active, but no payment, return, and fulfillment policies exist yet. Click `Create default seller policies`, or create the policies manually in seller settings, then sync again.
 - Payment/return created but fulfillment missing: eBay sandbox can reject Account API shipping services or return an internal application error even when Business Policies are active. Click `Discover shipping services`, then `Retry fulfillment policy`.
+- `Creating...` stuck in Settings: the browser action should time out after 25 seconds and show `Request timed out. Check Vercel logs or try again.` Retry with `Retry fulfillment policy`, then check `/api/ebay/policies/debug` for bounded attempt details.
 - Invalid shipping service code: sandbox rejected the fulfillment policy shipping service. The app discovers valid EBAY_US services first, then tries official-style free shipping and boolean zero-cost schemas while keeping any payment/return policies already created.
 - Missing inventory location: click `Setup location` in Settings.
 - Invalid category/aspects: revise the draft category ID and item specifics JSON.

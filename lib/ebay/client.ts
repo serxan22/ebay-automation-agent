@@ -108,25 +108,49 @@ export async function ebayFetch<T>({
   method = "GET",
   accessToken,
   body,
-  marketplaceId = process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US"
+  marketplaceId = process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US",
+  timeoutMs
 }: {
   path: string;
   method?: "GET" | "POST" | "PUT" | "DELETE";
   accessToken: string;
   body?: unknown;
   marketplaceId?: string;
+  timeoutMs?: number;
 }): Promise<T> {
   const environment = getEbayConfig().environment;
-  const response = await fetch(`${getEbayApiBaseUrl(environment)}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      "Content-Language": "en-US",
-      "X-EBAY-C-MARKETPLACE-ID": marketplaceId
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let response: Response;
+
+  try {
+    response = await fetch(`${getEbayApiBaseUrl(environment)}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "Content-Language": "en-US",
+        "X-EBAY-C-MARKETPLACE-ID": marketplaceId
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller?.signal
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new EbayIntegrationError(
+        `eBay API request timed out after ${timeoutMs}ms.`,
+        "PUBLISH_FAILED",
+        getEbayErrorRecommendation("PUBLISH_FAILED"),
+        { path, method, timeoutMs }
+      );
+    }
+
+    throw error;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 
   if (!response.ok) {
     const payload = await readEbayErrorPayload(response);

@@ -36,6 +36,8 @@ interface ProgramStatus {
 }
 
 type MessageTone = "success" | "error" | "warning";
+type BusyAction = "policies" | "createDefaults" | "retryFulfillment" | "location" | "disconnect" | "optIn" | "discoverServices";
+const CLIENT_ACTION_TIMEOUT_MS = 25_000;
 
 interface ShippingServiceSummary {
   shippingService: string;
@@ -48,6 +50,29 @@ interface PolicyAttemptDetails {
   errors?: Record<string, unknown>;
   policyStatus?: Record<string, { status: string; error?: string; attemptedShippingServices?: string[] }>;
   missing?: string[];
+  attempts?: unknown[];
+}
+
+interface PolicyActionPayload {
+  ok?: boolean;
+  partial?: boolean;
+  message?: string;
+  error?: string;
+  recommendation?: string;
+  policyStatus?: Record<string, { status: string; error?: string; attemptedShippingServices?: string[] }>;
+  errors?: Record<string, unknown>;
+  missing?: string[];
+  attempts?: unknown[];
+  fulfillmentPolicyStored?: boolean;
+  paymentPolicyStored?: boolean;
+  returnPolicyStored?: boolean;
+}
+
+interface PolicyAttemptRecord {
+  attemptNumber?: number;
+  shippingServiceCode?: string;
+  schema?: string;
+  ebayErrors?: Array<{ errorId?: unknown; longMessage?: unknown }>;
 }
 
 export function EbayConnectPanel({
@@ -69,7 +94,7 @@ export function EbayConnectPanel({
   const router = useRouter();
   const [message, setMessage] = useState(statusMessage ?? "");
   const [messageTone, setMessageTone] = useState<MessageTone>(statusTone);
-  const [busy, setBusy] = useState<"policies" | "createDefaults" | "location" | "disconnect" | "optIn" | null>(null);
+  const [busy, setBusy] = useState<BusyAction | null>(null);
   const [programStatus, setProgramStatus] = useState<ProgramStatus | null>(null);
   const [programLoading, setProgramLoading] = useState(false);
   const [shippingServices, setShippingServices] = useState<ShippingServiceSummary[] | null>(null);
@@ -88,8 +113,8 @@ export function EbayConnectPanel({
     let payload: ProgramStatus;
 
     try {
-      const response = await fetch("/api/ebay/programs");
-      payload = (await response.json()) as ProgramStatus;
+      const response = await fetchWithTimeout("/api/ebay/programs");
+      payload = await readJsonPayload<ProgramStatus>(response);
       setProgramStatus(payload);
 
       if (showMessage) {
@@ -102,8 +127,9 @@ export function EbayConnectPanel({
               }`
         );
       }
-    } catch {
-      payload = { ok: false, error: "Could not check seller policy status." };
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      payload = { ok: false, error: getClientFetchErrorMessage(error) };
       setProgramStatus(payload);
 
       if (showMessage) {
@@ -128,43 +154,50 @@ export function EbayConnectPanel({
     setBusy(action);
     setMessage("");
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body:
-        action === "location"
-          ? JSON.stringify({
-              merchantLocationKey: "default-sandbox-location",
-              name: "Default Sandbox Warehouse",
-              addressLine1: "123 Market Street",
-              country: "US",
-              city: "San Jose",
-              stateOrProvince: "CA",
-              postalCode: "95125"
-            })
-          : undefined
-    });
-    const payload = (await response.json()) as {
-      ok?: boolean;
-      error?: string;
-      code?: string;
-      recommendation?: string;
-    };
+    try {
+      const response = await fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body:
+          action === "location"
+            ? JSON.stringify({
+                merchantLocationKey: "default-sandbox-location",
+                name: "Default Sandbox Warehouse",
+                addressLine1: "123 Market Street",
+                country: "US",
+                city: "San Jose",
+                stateOrProvince: "CA",
+                postalCode: "95125"
+              })
+            : undefined
+      });
+      const payload = await readJsonPayload<{
+        ok?: boolean;
+        error?: string;
+        code?: string;
+        recommendation?: string;
+      }>(response);
 
-    setBusy(null);
-    setMessageTone(payload.ok ? "success" : "error");
-    setMessage(
-      payload.ok
-        ? action === "policies"
-          ? "Seller policies synced from eBay sandbox."
-          : "Inventory location checked and saved."
-        : payload.code === "SELLING_POLICY_NOT_OPTED_IN"
-          ? "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again."
-        : joinErrorAndRecommendation(payload.error ?? "Action failed.", payload.recommendation)
-    );
+      setMessageTone(payload.ok ? "success" : "error");
+      setMessage(
+        payload.ok
+          ? action === "policies"
+            ? "Seller policies synced from eBay sandbox."
+            : "Inventory location checked and saved."
+          : payload.code === "SELLING_POLICY_NOT_OPTED_IN"
+            ? "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again."
+          : joinErrorAndRecommendation(payload.error ?? "Action failed.", payload.recommendation)
+      );
 
-    if (payload.ok) {
-      router.refresh();
+      if (payload.ok) {
+        router.refresh();
+      }
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === action ? null : current));
     }
   }
 
@@ -172,22 +205,27 @@ export function EbayConnectPanel({
     setBusy("optIn");
     setMessage("");
 
-    const response = await fetch("/api/ebay/programs/opt-in-selling-policies", { method: "POST" });
-    const payload = (await response.json()) as { ok?: boolean; message?: string; error?: string; recommendation?: string };
+    try {
+      const response = await fetchWithTimeout("/api/ebay/programs/opt-in-selling-policies", { method: "POST" });
+      const payload = await readJsonPayload<{ ok?: boolean; message?: string; error?: string; recommendation?: string }>(response);
 
-    setBusy(null);
-    setMessageTone(payload.ok ? "success" : "error");
-    setMessage(
-      payload.ok
-        ? payload.message ??
-            "Selling Policy Management opt-in requested. eBay may take some time to activate it. Try Sync seller policies again."
-        : `${payload.error ?? "Selling Policy Management opt-in failed."}${
-            payload.recommendation ? ` ${payload.recommendation}` : ""
-          }`
-    );
+      setMessageTone(payload.ok ? "success" : "error");
+      setMessage(
+        payload.ok
+          ? payload.message ??
+              "Selling Policy Management opt-in requested. eBay may take some time to activate it. Try Sync seller policies again."
+          : joinErrorAndRecommendation(payload.error ?? "Selling Policy Management opt-in failed.", payload.recommendation)
+      );
 
-    if (payload.ok) {
-      await refreshPrograms();
+      if (payload.ok) {
+        await refreshPrograms();
+      }
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === "optIn" ? null : current));
     }
   }
 
@@ -195,79 +233,119 @@ export function EbayConnectPanel({
     setBusy("createDefaults");
     setMessage("");
 
-    const response = await fetch("/api/ebay/policies/create-defaults", { method: "POST" });
-    const payload = (await response.json()) as {
-      ok?: boolean;
-      partial?: boolean;
-      message?: string;
-      error?: string;
-      recommendation?: string;
-      policyStatus?: Record<string, { status: string; error?: string }>;
-      errors?: Record<string, unknown>;
-      missing?: string[];
-    };
+    try {
+      const response = await fetchWithTimeout("/api/ebay/policies/create-defaults", { method: "POST" });
+      const payload = await readJsonPayload<PolicyActionPayload>(response);
 
-    setBusy(null);
-    setMessageTone(payload.ok ? (payload.partial ? "warning" : "success") : "error");
+      handlePolicyActionPayload(payload, "Default sandbox seller policies created and synced.");
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === "createDefaults" ? null : current));
+    }
+  }
+
+  async function retryFulfillmentPolicy() {
+    setBusy("retryFulfillment");
+    setMessage("");
+
+    try {
+      const response = await fetchWithTimeout("/api/ebay/policies/retry-fulfillment", { method: "POST" });
+      const payload = await readJsonPayload<PolicyActionPayload>(response);
+
+      handlePolicyActionPayload(payload, "Fulfillment policy created and synced.");
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === "retryFulfillment" ? null : current));
+    }
+  }
+
+  function handlePolicyActionPayload(payload: PolicyActionPayload, successMessage: string) {
+    const tone: MessageTone = payload.partial ? "warning" : payload.ok ? "success" : "error";
+    const baseMessage =
+      payload.message ??
+      (payload.ok ? successMessage : payload.error ?? "Seller policy action failed.");
+
+    setMessageTone(tone);
     setMessage(
-      payload.ok
-        ? `${payload.message ?? "Default sandbox seller policies created and synced."}${formatPolicyStatus(payload.policyStatus)}`
-        : joinErrorAndRecommendation(payload.error ?? "Default seller policy creation failed.", payload.recommendation)
+      payload.ok || payload.partial
+        ? `${baseMessage}${formatPolicyStatus(payload.policyStatus)}`
+        : joinErrorAndRecommendation(baseMessage, payload.recommendation)
     );
     setPolicyAttemptDetails({
       errors: payload.errors,
       policyStatus: payload.policyStatus,
-      missing: payload.missing
+      missing: payload.missing,
+      attempts: payload.attempts
     });
 
-    if (payload.ok) {
+    if (payload.ok || payload.partial) {
       router.refresh();
     }
   }
 
   async function discoverShippingServices() {
-    setBusy("policies");
+    setBusy("discoverServices");
     setMessage("");
 
-    const response = await fetch("/api/ebay/shipping-services");
-    const payload = (await response.json()) as {
-      ok?: boolean;
-      discoverySucceeded?: boolean;
-      discoveredServicesCount?: number;
-      services?: ShippingServiceSummary[];
-      fallbackServices?: ShippingServiceSummary[];
-      error?: string;
-      discoveryError?: string | null;
-    };
-    const services = (payload.services?.length ? payload.services : payload.fallbackServices ?? []).filter(
-      (service) => service.internationalService !== true && service.validForSellingFlow !== false
-    );
+    try {
+      const response = await fetchWithTimeout("/api/ebay/shipping-services");
+      const payload = await readJsonPayload<{
+        ok?: boolean;
+        discoverySucceeded?: boolean;
+        discoveredServicesCount?: number;
+        services?: ShippingServiceSummary[];
+        fallbackServices?: ShippingServiceSummary[];
+        error?: string;
+        discoveryError?: string | null;
+      }>(response);
+      const services = (payload.services?.length ? payload.services : payload.fallbackServices ?? []).filter(
+        (service) => service.internationalService !== true && service.validForSellingFlow !== false
+      );
 
-    setBusy(null);
-    setShippingServices(services.slice(0, 12));
-    setMessageTone(response.ok ? (payload.discoverySucceeded ? "success" : "warning") : "error");
-    setMessage(
-      response.ok
-        ? payload.discoverySucceeded
-          ? `Discovered ${payload.discoveredServicesCount ?? services.length} eBay shipping services.`
-          : `Shipping service discovery used fallback services. ${payload.discoveryError ?? ""}`.trim()
-        : payload.error ?? "Shipping service discovery failed."
-    );
+      setShippingServices(services.slice(0, 12));
+      setMessageTone(response.ok ? (payload.discoverySucceeded ? "success" : "warning") : "error");
+      setMessage(
+        response.ok
+          ? payload.discoverySucceeded
+            ? `Discovered ${payload.discoveredServicesCount ?? services.length} eBay shipping services.`
+            : `Shipping service discovery used fallback services. ${payload.discoveryError ?? ""}`.trim()
+          : payload.error ?? "Shipping service discovery failed."
+      );
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === "discoverServices" ? null : current));
+    }
   }
 
   async function disconnect() {
     setBusy("disconnect");
     setMessage("");
 
-    const response = await fetch("/api/ebay/disconnect", { method: "POST" });
-    const payload = (await response.json()) as { ok?: boolean; error?: string };
+    try {
+      const response = await fetchWithTimeout("/api/ebay/disconnect", { method: "POST" });
+      const payload = await readJsonPayload<{ ok?: boolean; error?: string }>(response);
 
-    setBusy(null);
-    setMessageTone(payload.ok ? "success" : "error");
-    setMessage(payload.ok ? "eBay sandbox disconnected." : payload.error ?? "Disconnect failed.");
+      setMessageTone(payload.ok ? "success" : "error");
+      setMessage(payload.ok ? "eBay sandbox disconnected." : payload.error ?? "Disconnect failed.");
 
-    if (payload.ok) {
-      router.refresh();
+      if (payload.ok) {
+        router.refresh();
+      }
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === "disconnect" ? null : current));
     }
   }
 
@@ -288,7 +366,7 @@ export function EbayConnectPanel({
             <KeyRound size={16} /> {connected ? "Reconnect sandbox" : "Connect sandbox"}
           </Button>
           {connected ? (
-            <Button variant="secondary" onClick={disconnect} disabled={busy !== null}>
+            <Button variant="secondary" onClick={disconnect} disabled={busy === "disconnect"}>
               <LogOut size={16} /> {busy === "disconnect" ? "Disconnecting..." : "Disconnect sandbox"}
             </Button>
           ) : null}
@@ -322,18 +400,23 @@ export function EbayConnectPanel({
         <Button
           variant="secondary"
           onClick={enableSellerPolicies}
-          disabled={!connected || busy !== null || programLoading || Boolean(programStatus?.sellingPolicyManagement?.active)}
+          disabled={
+            !connected ||
+            programLoading ||
+            Boolean(programStatus?.sellingPolicyManagement?.active) ||
+            busy === "optIn"
+          }
         >
           <ShieldCheck size={16} /> {busy === "optIn" ? "Requesting..." : "Enable seller policies"}
         </Button>
         {canCreateDefaultPolicies ? (
           <Button
             variant="secondary"
-            onClick={createDefaultSellerPolicies}
-            disabled={busy !== null || programLoading}
+            onClick={paymentPolicy && returnPolicy && !fulfillmentPolicy ? retryFulfillmentPolicy : createDefaultSellerPolicies}
+            disabled={programLoading || busy === "createDefaults" || busy === "retryFulfillment"}
           >
             <Building2 size={16} />{" "}
-            {busy === "createDefaults"
+            {busy === "createDefaults" || busy === "retryFulfillment"
               ? "Creating..."
               : paymentPolicy && returnPolicy && !fulfillmentPolicy
                 ? "Retry fulfillment policy"
@@ -344,22 +427,22 @@ export function EbayConnectPanel({
           <Button
             variant="secondary"
             onClick={discoverShippingServices}
-            disabled={busy !== null || programLoading}
+            disabled={programLoading || busy === "discoverServices"}
           >
-            <RefreshCcw size={16} /> Discover shipping services
+            <RefreshCcw size={16} /> {busy === "discoverServices" ? "Discovering..." : "Discover shipping services"}
           </Button>
         ) : null}
         <Button
           variant="secondary"
           onClick={() => postAction("/api/ebay/policies/sync", "policies")}
-          disabled={!connected || busy !== null}
+          disabled={!connected || busy === "policies"}
         >
           <RefreshCcw size={16} /> {busy === "policies" ? "Syncing..." : "Sync seller policies"}
         </Button>
         <Button
           variant="secondary"
           onClick={() => postAction("/api/ebay/location", "location")}
-          disabled={!connected || busy !== null}
+          disabled={!connected || busy === "location"}
         >
           <MapPin size={16} /> {busy === "location" ? "Checking..." : "Setup location"}
         </Button>
@@ -411,12 +494,37 @@ function ShippingServicesPanel({ services }: { services: ShippingServiceSummary[
 }
 
 function PolicyAttemptDetailsPanel({ details }: { details: PolicyAttemptDetails }) {
+  const attempts = Array.isArray(details.attempts) ? details.attempts : [];
   const text = JSON.stringify(details, null, 2);
   const discoveryFailed = text.includes('"discoveryFailed": true');
 
   return (
     <details className="mt-4 rounded-md border border-ink-200 bg-ink-50 p-4 text-sm text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200">
       <summary className="cursor-pointer font-semibold">Policy creation details</summary>
+      {attempts.length ? (
+        <div className="mt-3 space-y-2">
+          {attempts.slice(0, 8).map((attempt, index) => {
+            const record = attempt && typeof attempt === "object" ? (attempt as PolicyAttemptRecord) : {};
+            const firstError = Array.isArray(record.ebayErrors) ? record.ebayErrors[0] : null;
+            const ebayMessage =
+              typeof firstError?.longMessage === "string"
+                ? firstError.longMessage
+                : typeof firstError?.errorId === "string" || typeof firstError?.errorId === "number"
+                  ? String(firstError.errorId)
+                  : "No eBay message captured";
+            return (
+              <div key={`${record.shippingServiceCode ?? index}-${record.schema ?? index}`} className="rounded-md bg-white/70 p-2 dark:bg-white/[0.06]">
+                <p className="font-medium">
+                  {record.shippingServiceCode ?? "Unknown service"} · {record.schema ?? "unknown schema"}
+                </p>
+                <p className="text-xs opacity-80">
+                  Attempt {record.attemptNumber ?? index + 1} · {ebayMessage}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-md bg-ink-950 p-3 text-xs text-white">
         {text}
       </pre>
@@ -541,6 +649,57 @@ function joinErrorAndRecommendation(error: string, recommendation?: string) {
   }
 
   return `${error} ${recommendation}`;
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), CLIENT_ACTION_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function readJsonPayload<T>(response: Response): Promise<T> {
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return {
+      ok: false,
+      error: response.ok ? "Response did not include JSON." : `Request failed (${response.status}).`
+    } as T;
+  }
+}
+
+function getClientFetchErrorMessage(error: unknown) {
+  if (
+    error instanceof DOMException &&
+    (error.name === "AbortError" || error.message.toLowerCase().includes("abort"))
+  ) {
+    return "Request timed out. Check Vercel logs or try again.";
+  }
+
+  if (error instanceof Error && error.message.toLowerCase().includes("timeout")) {
+    return "Request timed out. Check Vercel logs or try again.";
+  }
+
+  return error instanceof Error ? error.message : "Request failed. Check Vercel logs or try again.";
+}
+
+async function logPolicyUiTimeoutIfNeeded(error: unknown) {
+  if (
+    error instanceof DOMException &&
+    (error.name === "AbortError" || error.message.toLowerCase().includes("abort"))
+  ) {
+    console.warn("[ebay_policy_ui_timeout]", {
+      timeoutMs: CLIENT_ACTION_TIMEOUT_MS
+    });
+  }
 }
 
 function getMessageClassName(tone: MessageTone) {

@@ -29,6 +29,31 @@ export async function GET() {
       getSellerPolicyCollections(accessToken, account.marketplace)
     ]);
     const optedInProgramTypes = (programs.programs ?? []).map((program) => program.programType);
+    const { data: recentLogs } = await supabase
+      .from("automation_logs")
+      .select("message,level,metadata_json,created_at")
+      .eq("user_id", user.id)
+      .eq("module", "ebay_policies")
+      .in("message", [
+        "ebay_fulfillment_retry_attempt",
+        "ebay_fulfillment_retry_attempt_failed",
+        "ebay_fulfillment_retry_success",
+        "ebay_fulfillment_retry_failed",
+        "ebay_default_fulfillment_policy_attempt",
+        "ebay_default_fulfillment_policy_attempt_failed",
+        "ebay_default_fulfillment_policy_failed",
+        "ebay_default_policies_create_partial"
+      ])
+      .order("created_at", { ascending: false })
+      .limit(12);
+    const storedPolicyIds = {
+      paymentPolicyId: account.payment_policy_id,
+      returnPolicyId: account.return_policy_id,
+      fulfillmentPolicyId: account.fulfillment_policy_id,
+      paymentPolicyName: account.payment_policy_name,
+      returnPolicyName: account.return_policy_name,
+      fulfillmentPolicyName: account.fulfillment_policy_name
+    };
 
     return NextResponse.json({
       connected: true,
@@ -39,14 +64,17 @@ export async function GET() {
       paymentPolicies: policies.payment.paymentPolicies.map((policy) => summarizePolicy(policy, "payment")),
       returnPolicies: policies.returnPolicies.returnPolicies.map((policy) => summarizePolicy(policy, "return")),
       fulfillmentPolicies: policies.fulfillment.fulfillmentPolicies.map((policy) => summarizePolicy(policy, "fulfillment")),
-      accountStoredPolicyIds: {
-        paymentPolicyId: account.payment_policy_id,
-        returnPolicyId: account.return_policy_id,
-        fulfillmentPolicyId: account.fulfillment_policy_id,
-        paymentPolicyName: account.payment_policy_name,
-        returnPolicyName: account.return_policy_name,
-        fulfillmentPolicyName: account.fulfillment_policy_name
-      }
+      accountStoredPolicyIds: storedPolicyIds,
+      fulfillmentMissingReason: getFulfillmentMissingReason(
+        storedPolicyIds.fulfillmentPolicyId,
+        policies.fulfillment.fulfillmentPolicies.length
+      ),
+      lastPolicyCreationAttempts: (recentLogs ?? []).map((log) => ({
+        message: log.message,
+        level: log.level,
+        createdAt: log.created_at,
+        metadata: summarizePolicyAttemptLog(log.metadata_json)
+      }))
     });
   } catch (error) {
     const authResponse = authErrorResponse(error);
@@ -62,6 +90,39 @@ export async function GET() {
       { status: 400 }
     );
   }
+}
+
+function getFulfillmentMissingReason(storedFulfillmentPolicyId: string | null | undefined, fulfillmentPoliciesCount: number) {
+  if (storedFulfillmentPolicyId) {
+    return null;
+  }
+
+  if (fulfillmentPoliciesCount === 0) {
+    return "No fulfillment policies were returned by the eBay sandbox Account API.";
+  }
+
+  return "Fulfillment policies exist in eBay, but none is currently stored on the connected account row.";
+}
+
+function summarizePolicyAttemptLog(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object") {
+    return {};
+  }
+
+  const record = metadata as Record<string, unknown>;
+
+  return {
+    marketplaceId: record.marketplaceId,
+    attemptNumber: record.attemptNumber,
+    shippingServiceCode: record.shippingServiceCode,
+    shippingCarrierCode: record.shippingCarrierCode,
+    shippingCostIncluded: record.shippingCostIncluded,
+    schema: record.schema,
+    ebayErrors: record.ebayErrors,
+    error: record.error,
+    code: record.code,
+    fulfillmentPolicyStored: record.fulfillmentPolicyStored
+  };
 }
 
 function summarizePolicy(policy: SellerPolicy, type: "payment" | "return" | "fulfillment") {

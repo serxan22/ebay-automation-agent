@@ -19,6 +19,25 @@ export interface SellerPolicy {
   categoryTypes?: Array<{ name: string; default?: boolean }>;
 }
 
+export interface FulfillmentRetryResult {
+  ok: boolean;
+  partial: boolean;
+  fulfillmentPolicyStored: boolean;
+  paymentPolicyStored: boolean;
+  returnPolicyStored: boolean;
+  message: string;
+  attempts: unknown[];
+  errors: DefaultPolicyErrors;
+  policyStatus: Record<"paymentPolicy" | "returnPolicy" | "fulfillmentPolicy", SellerPolicyStatus>;
+  missing: string[];
+  account: unknown;
+  policies: {
+    paymentPolicy: SellerPolicy | null;
+    returnPolicy: SellerPolicy | null;
+    fulfillmentPolicy: SellerPolicy | null;
+  };
+}
+
 interface DefaultPoliciesCreated {
   paymentPolicy: SellerPolicy | null;
   returnPolicy: SellerPolicy | null;
@@ -70,7 +89,8 @@ export async function getFulfillmentPolicies(accessToken: string, marketplaceId 
   return ebayFetch<{ fulfillmentPolicies: SellerPolicy[] }>({
     accessToken,
     marketplaceId,
-    path: `/sell/account/v1/fulfillment_policy?marketplace_id=${marketplaceId}`
+    path: `/sell/account/v1/fulfillment_policy?marketplace_id=${marketplaceId}`,
+    timeoutMs: 7_000
   });
 }
 
@@ -78,7 +98,8 @@ export async function getPaymentPolicies(accessToken: string, marketplaceId = "E
   return ebayFetch<{ paymentPolicies: SellerPolicy[] }>({
     accessToken,
     marketplaceId,
-    path: `/sell/account/v1/payment_policy?marketplace_id=${marketplaceId}`
+    path: `/sell/account/v1/payment_policy?marketplace_id=${marketplaceId}`,
+    timeoutMs: 7_000
   });
 }
 
@@ -86,7 +107,8 @@ export async function getReturnPolicies(accessToken: string, marketplaceId = "EB
   return ebayFetch<{ returnPolicies: SellerPolicy[] }>({
     accessToken,
     marketplaceId,
-    path: `/sell/account/v1/return_policy?marketplace_id=${marketplaceId}`
+    path: `/sell/account/v1/return_policy?marketplace_id=${marketplaceId}`,
+    timeoutMs: 7_000
   });
 }
 
@@ -151,17 +173,21 @@ export async function createDefaultFulfillmentPolicy({
   accessToken,
   marketplaceId = "EBAY_US",
   supabase,
-  userId
+  userId,
+  logPrefix = "ebay_default_fulfillment_policy",
+  maxAttempts = 8
 }: {
   accessToken: string;
   marketplaceId?: string;
   supabase: SupabaseClient;
   userId: string;
+  logPrefix?: string;
+  maxAttempts?: number;
 }) {
   let lastError: unknown;
   const discovery = await discoverShippingServicesWithFallback(accessToken);
   const candidates = getPreferredDomesticShippingServices(discovery.services);
-  const attempts = buildFulfillmentPolicyAttempts(candidates);
+  const attempts = buildFulfillmentPolicyAttempts(candidates).slice(0, maxAttempts);
   const failedAttempts: Array<{
     attemptNumber: number;
     shippingServiceCode: string;
@@ -176,7 +202,7 @@ export async function createDefaultFulfillmentPolicy({
       userId,
       level: "info",
       module: "ebay_policies",
-      message: "ebay_default_fulfillment_policy_attempt",
+      message: `${logPrefix}_attempt`,
       metadata: {
         marketplaceId,
         attemptNumber: attempt.attemptNumber,
@@ -197,7 +223,8 @@ export async function createDefaultFulfillmentPolicy({
         marketplaceId,
         method: "POST",
         path: "/sell/account/v1/fulfillment_policy",
-        body: buildDefaultFulfillmentPolicyBody(marketplaceId, attempt)
+        body: buildDefaultFulfillmentPolicyBody(marketplaceId, attempt),
+        timeoutMs: 7_000
       });
     } catch (error) {
       lastError = error;
@@ -214,7 +241,7 @@ export async function createDefaultFulfillmentPolicy({
         userId,
         level: "warning",
         module: "ebay_policies",
-        message: "ebay_default_fulfillment_policy_attempt_failed",
+        message: `${logPrefix}_attempt_failed`,
         metadata: {
           marketplaceId,
           attemptNumber: attempt.attemptNumber,
@@ -392,6 +419,136 @@ export async function createDefaultSellerPolicies({
   };
 }
 
+export async function retryFulfillmentPolicy({
+  supabase,
+  userId,
+  marketplaceId = "EBAY_US"
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  marketplaceId?: string;
+}): Promise<FulfillmentRetryResult> {
+  const config = getEbayConfig();
+
+  if (config.environment !== "sandbox") {
+    throw new EbayIntegrationError(
+      "Fulfillment policy retry is available for sandbox only.",
+      "PRODUCTION_DISABLED",
+      getEbayErrorRecommendation("PRODUCTION_DISABLED")
+    );
+  }
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "ebay_policies",
+    message: "ebay_fulfillment_retry_started",
+    metadata: { marketplaceId }
+  });
+
+  const { account, accessToken } = await getValidEbayAccessToken({
+    supabase,
+    userId,
+    marketplace: marketplaceId
+  });
+  const existing = await getSellerPolicyCollections(accessToken, marketplaceId);
+  const existingFulfillment = chooseDefaultPolicy(existing.fulfillment.fulfillmentPolicies, marketplaceId);
+
+  if (existingFulfillment || account.fulfillment_policy_id) {
+    const synced = await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
+    const policyStatus = buildDefaultPolicyStatus(
+      synced.policies,
+      { paymentPolicy: null, returnPolicy: null, fulfillmentPolicy: null },
+      {}
+    );
+
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "success",
+      module: "ebay_policies",
+      message: "ebay_fulfillment_retry_success",
+      metadata: {
+        marketplaceId,
+        policyId: synced.policies.fulfillmentPolicy?.fulfillmentPolicyId ?? account.fulfillment_policy_id
+      }
+    });
+
+    return {
+      ok: true,
+      partial: false,
+      fulfillmentPolicyStored: true,
+      paymentPolicyStored: Boolean(synced.policies.paymentPolicy),
+      returnPolicyStored: Boolean(synced.policies.returnPolicy),
+      message: "Fulfillment policy found and synced.",
+      attempts: [],
+      errors: {},
+      policyStatus,
+      missing: getMissingPolicyNames(policyStatus),
+      account: synced.account,
+      policies: synced.policies
+    };
+  }
+
+  const errors: DefaultPolicyErrors = {};
+  let createdFulfillmentPolicy: SellerPolicy | null = null;
+
+  try {
+    createdFulfillmentPolicy = await createDefaultFulfillmentPolicy({
+      accessToken,
+      marketplaceId,
+      supabase,
+      userId,
+      logPrefix: "ebay_fulfillment_retry",
+      maxAttempts: 8
+    });
+  } catch (error) {
+    errors.fulfillmentPolicy = summarizePolicyCreateError(error);
+  }
+
+  const synced = await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
+  const policyStatus = buildDefaultPolicyStatus(
+    synced.policies,
+    { paymentPolicy: null, returnPolicy: null, fulfillmentPolicy: createdFulfillmentPolicy },
+    errors
+  );
+  const missing = getMissingPolicyNames(policyStatus);
+  const fulfillmentPolicyStored = Boolean(synced.policies.fulfillmentPolicy);
+  const result: FulfillmentRetryResult = {
+    ok: fulfillmentPolicyStored,
+    partial: !fulfillmentPolicyStored,
+    fulfillmentPolicyStored,
+    paymentPolicyStored: Boolean(synced.policies.paymentPolicy),
+    returnPolicyStored: Boolean(synced.policies.returnPolicy),
+    message: fulfillmentPolicyStored
+      ? "Fulfillment policy created and synced."
+      : "Payment and return policies are ready, but fulfillment policy creation failed after bounded retry attempts.",
+    attempts: extractAttemptsFromPolicyError(errors.fulfillmentPolicy),
+    errors,
+    policyStatus,
+    missing,
+    account: synced.account,
+    policies: synced.policies
+  };
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: fulfillmentPolicyStored ? "success" : "error",
+    module: "ebay_policies",
+    message: fulfillmentPolicyStored ? "ebay_fulfillment_retry_success" : "ebay_fulfillment_retry_failed",
+    metadata: {
+      marketplaceId,
+      fulfillmentPolicyStored,
+      attempts: result.attempts,
+      errors
+    }
+  });
+
+  return result;
+}
+
 export async function syncSellerPolicies({
   supabase,
   userId,
@@ -563,11 +720,13 @@ function buildFulfillmentPolicyAttempts(candidates: EbayShippingService[]): Fulf
   const usableCandidates = candidates.length
     ? candidates
     : [
-        { shippingService: "USPSPriorityFlatRateBox" },
+        { shippingService: "USPSFirstClass" },
         { shippingService: "USPSPriority" },
+        { shippingService: "UPSGround" },
+        { shippingService: "FedExHomeDelivery" },
+        { shippingService: "USPSPriorityFlatRateBox" },
         { shippingService: "USPSGroundAdvantage" },
         { shippingService: "USPSParcel" },
-        { shippingService: "UPSGround" },
         { shippingService: "FedExGround" }
       ];
   const attempts: FulfillmentPolicyAttempt[] = [];
@@ -742,7 +901,8 @@ async function createWithFallbackAttempts<T extends SellerPolicy>(
         marketplaceId,
         method: "POST",
         path,
-        body
+        body,
+        timeoutMs: 7_000
       });
     } catch (error) {
       lastError = error;
@@ -870,6 +1030,22 @@ function extractAttemptedShippingServices(error?: PolicyCreateErrorSummary) {
   const attempted = (ebayDetails as { attemptedShippingServices?: unknown }).attemptedShippingServices;
 
   return Array.isArray(attempted) ? attempted.filter((value): value is string => typeof value === "string") : [];
+}
+
+function extractAttemptsFromPolicyError(error?: PolicyCreateErrorSummary) {
+  if (!error?.details || typeof error.details !== "object") {
+    return [];
+  }
+
+  const ebayDetails = "ebay" in error.details ? (error.details as { ebay?: unknown }).ebay : error.details;
+
+  if (!ebayDetails || typeof ebayDetails !== "object" || !("attempts" in ebayDetails)) {
+    return [];
+  }
+
+  const attempts = (ebayDetails as { attempts?: unknown }).attempts;
+
+  return Array.isArray(attempts) ? attempts : [];
 }
 
 async function logDefaultPolicyCreated(

@@ -8,16 +8,36 @@ export interface EbayShippingService {
   validForSellingFlow?: boolean;
 }
 
+const TRADING_API_DISCOVERY_TIMEOUT_MS = 8_000;
+
 export const fallbackShippingServices: EbayShippingService[] = [
   {
-    shippingService: "USPSPriorityFlatRateBox",
-    description: "USPS Priority Mail Flat Rate Box",
+    shippingService: "USPSFirstClass",
+    description: "USPS First Class",
     internationalService: false,
     validForSellingFlow: true
   },
   {
     shippingService: "USPSPriority",
     description: "USPS Priority Mail",
+    internationalService: false,
+    validForSellingFlow: true
+  },
+  {
+    shippingService: "UPSGround",
+    description: "UPS Ground",
+    internationalService: false,
+    validForSellingFlow: true
+  },
+  {
+    shippingService: "FedExHomeDelivery",
+    description: "FedEx Home Delivery",
+    internationalService: false,
+    validForSellingFlow: true
+  },
+  {
+    shippingService: "USPSPriorityFlatRateBox",
+    description: "USPS Priority Mail Flat Rate Box",
     internationalService: false,
     validForSellingFlow: true
   },
@@ -34,12 +54,6 @@ export const fallbackShippingServices: EbayShippingService[] = [
     validForSellingFlow: true
   },
   {
-    shippingService: "UPSGround",
-    description: "UPS Ground",
-    internationalService: false,
-    validForSellingFlow: true
-  },
-  {
     shippingService: "FedExGround",
     description: "FedEx Ground",
     internationalService: false,
@@ -49,22 +63,43 @@ export const fallbackShippingServices: EbayShippingService[] = [
 
 export async function discoverEbayShippingServices(accessToken: string) {
   const config = getEbayConfig();
-  const response = await fetch(`${getEbayApiBaseUrl(config.environment)}/ws/api.dll`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "text/xml",
-      "X-EBAY-API-CALL-NAME": "GeteBayDetails",
-      "X-EBAY-API-COMPATIBILITY-LEVEL": "1231",
-      "X-EBAY-API-SITEID": "0",
-      "X-EBAY-API-IAF-TOKEN": accessToken
-    },
-    body: [
-      '<?xml version="1.0" encoding="utf-8"?>',
-      '<GeteBayDetailsRequest xmlns="urn:ebay:apis:eBLBaseComponents">',
-      "<DetailName>ShippingServiceDetails</DetailName>",
-      "</GeteBayDetailsRequest>"
-    ].join("")
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TRADING_API_DISCOVERY_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(`${getEbayApiBaseUrl(config.environment)}/ws/api.dll`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/xml",
+        "X-EBAY-API-CALL-NAME": "GeteBayDetails",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "1231",
+        "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-IAF-TOKEN": accessToken
+      },
+      body: [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<GeteBayDetailsRequest xmlns="urn:ebay:apis:eBLBaseComponents">',
+        "<DetailName>ShippingServiceDetails</DetailName>",
+        "</GeteBayDetailsRequest>"
+      ].join(""),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new EbayIntegrationError(
+        "eBay shipping service discovery timed out.",
+        "PUBLISH_FAILED",
+        "Use fallback shipping services or retry eBay sandbox discovery.",
+        { timeoutMs: TRADING_API_DISCOVERY_TIMEOUT_MS }
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
   const text = await response.text();
 
   if (!response.ok) {
@@ -87,7 +122,18 @@ export async function discoverEbayShippingServices(accessToken: string) {
     );
   }
 
-  return parseShippingServiceDetails(text);
+  const services = parseShippingServiceDetails(text);
+
+  if (!services.length) {
+    throw new EbayIntegrationError(
+      "eBay shipping service discovery returned no services.",
+      "PUBLISH_FAILED",
+      "Use fallback shipping services or retry eBay sandbox discovery.",
+      { ack }
+    );
+  }
+
+  return services;
 }
 
 export async function discoverShippingServicesWithFallback(accessToken: string) {
@@ -111,11 +157,13 @@ export async function discoverShippingServicesWithFallback(accessToken: string) 
 
 export function getPreferredDomesticShippingServices(services: EbayShippingService[]) {
   const preferred = [
-    "USPSPriorityFlatRateBox",
+    "USPSFirstClass",
     "USPSPriority",
+    "UPSGround",
+    "FedExHomeDelivery",
+    "USPSPriorityFlatRateBox",
     "USPSGroundAdvantage",
     "USPSParcel",
-    "UPSGround",
     "FedExGround"
   ];
   const domesticValid = services.filter(
