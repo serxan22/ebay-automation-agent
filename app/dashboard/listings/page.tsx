@@ -115,13 +115,16 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
     const analysis = getEmbeddedRow(row.product_analysis);
     const readiness = await validateListingReadiness({
       draft: {
+        id: row.id,
         status: row.status,
         ebay_title: row.ebay_title,
         ebay_description: row.ebay_description,
         ebay_category_id: row.ebay_category_id,
         item_specifics: row.item_specifics,
+        condition: row.condition,
         quantity: row.quantity,
         price: row.price,
+        supplier_sku: supplierProduct?.supplier_sku,
         optimized_image_urls: row.optimized_image_urls
       },
       account

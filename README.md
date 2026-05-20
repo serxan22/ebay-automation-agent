@@ -239,7 +239,7 @@ Sandbox publishing flow:
 3. Confirm `Business policies` is `Active`, or click `Enable seller policies` to request `SELLING_POLICY_MANAGEMENT` opt-in.
 4. Click `Sync seller policies` to load payment, return, and fulfillment policies from the sandbox Account API.
 5. If sync says no policies exist, click `Create default seller policies`; this creates only missing sandbox payment, return, and fulfillment policies, then syncs their IDs into `public.ebay_accounts`.
-6. Click `Setup location` to create/check the stable `default-sandbox-location` warehouse inventory location.
+6. Click `Setup location` to create/check the stable `default-sandbox-location` warehouse inventory location with the default San Jose, CA warehouse address.
 7. Ensure a listing draft has a valid `ebay_category_id`, item specifics, price, quantity, and at least one image URL.
 8. Click `Publish sandbox` from `/dashboard/listings`.
 
@@ -254,6 +254,15 @@ POST /api/ebay/policies/create-defaults
 `GET /api/ebay/programs` calls `get_opted_in_programs` and reports whether `SELLING_POLICY_MANAGEMENT` is active. `POST /api/ebay/programs/opt-in-selling-policies` calls `program/opt_in` with `{ "programType": "SELLING_POLICY_MANAGEMENT" }`. eBay can take time to activate program opt-in, so wait and check again before retrying policy sync.
 
 Opt-in only enables the Business Policies feature. The sandbox seller still needs actual Payment, Return, and Fulfillment policies before Inventory API offers can be published. `POST /api/ebay/policies/create-defaults` checks existing policies first, creates only the missing defaults for `EBAY_US`, then runs policy sync to save the IDs.
+
+Default fulfillment policy creation starts with `USPSPriorityFlatRateBox` for free domestic flat-rate shipping, then retries `USPSPriority`, `USPSParcel`, `USPSGround`, and `UPSGround` if sandbox rejects a service code. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
+
+The OAuth callback issue was fixed by using the neutral public app domain and clean callback route:
+
+```text
+APP_URL=https://seller-automation-agent.vercel.app
+EBAY_REDIRECT_URI=https://seller-automation-agent.vercel.app/market/callback
+```
 
 The publish flow calls:
 
@@ -272,6 +281,7 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 - Callback not saving tokens: run `sql/phase4_ebay_oauth_states.sql` and confirm `SUPABASE_SERVICE_ROLE_KEY` and `ENCRYPTION_SECRET` exist in Vercel.
 - `20403 User is not eligible for Business Policy`: the sandbox seller is not opted into `SELLING_POLICY_MANAGEMENT`. Click `Enable seller policies`, wait for eBay to activate the program if needed, then click `Sync seller policies` again.
 - No policies found: Business Policies are active, but no payment, return, and fulfillment policies exist yet. Click `Create default seller policies`, or create the policies manually in seller settings, then sync again.
+- Invalid shipping service code: sandbox rejected the fulfillment policy shipping service. Click `Create default seller policies` again; the app retries the missing fulfillment policy with the next sandbox-safe service code and keeps any payment/return policies already created.
 - Missing inventory location: click `Setup location` in Settings.
 - Invalid category/aspects: revise the draft category ID and item specifics JSON.
 - Image error: use publicly accessible HTTP/HTTPS image URLs; HTTPS is recommended.
@@ -290,7 +300,7 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 10. Create or revise a listing draft until readiness is green, then approve it.
 11. Click `Publish sandbox`.
 
-Manual sandbox setup may still be required inside eBay if the Account API rejects a default sandbox policy schema. After opt-in, the normal path is `Sync seller policies` → `Create default seller policies` if needed → `Setup location` → approve draft → `Publish sandbox`.
+Manual sandbox setup may still be required inside eBay if the Account API rejects every default fulfillment shipping code. After opt-in, the normal path is Settings → `Create default seller policies`, Settings → `Setup location`, Listings → approve draft, Listings → `Publish sandbox`.
 
 ## Telegram Bot
 

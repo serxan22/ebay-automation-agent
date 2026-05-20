@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getEbayAccount } from "@/lib/ebay/account";
 import { ensureInventoryLocation } from "@/lib/ebay/locations";
-import { syncSellerPolicies } from "@/lib/ebay/policies";
+import { createDefaultSellerPolicies, syncSellerPolicies } from "@/lib/ebay/policies";
 import { publishListingDraftToEbaySandbox } from "@/lib/ebay/publish";
 import { getConfiguredAiProvider } from "@/lib/ai";
 import { generateListing } from "@/lib/ai/generate-listing";
@@ -155,6 +155,8 @@ export async function executeTelegramIntentAction({
       return showEbayReadiness({ supabase, userId });
     case "SYNC_EBAY_POLICIES":
       return syncEbayPoliciesFromTelegram({ supabase, userId });
+    case "CREATE_DEFAULT_EBAY_POLICIES":
+      return createDefaultEbayPoliciesFromTelegram({ supabase, userId });
     case "SETUP_EBAY_LOCATION":
       return setupEbayLocationFromTelegram({ supabase, userId });
     case "PUBLISH_SAFE_DRAFTS_SANDBOX":
@@ -990,7 +992,7 @@ async function showEbayReadiness({ supabase, userId }: ActionContext) {
   const account = await getEbayAccount({ supabase, userId });
   const { data, error } = await supabase
     .from("listing_drafts")
-    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,quantity,price,optimized_image_urls,error_message,ebay_error_code")
+    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,error_message,ebay_error_code")
     .eq("user_id", userId)
     .in("status", ["approved", "draft", "failed"])
     .order("updated_at", { ascending: false })
@@ -1048,6 +1050,30 @@ async function syncEbayPoliciesFromTelegram({ supabase, userId }: ActionContext)
   }
 }
 
+async function createDefaultEbayPoliciesFromTelegram({ supabase, userId }: ActionContext) {
+  try {
+    const result = await createDefaultSellerPolicies({ supabase, userId, marketplaceId: "EBAY_US" });
+    const status = result.policyStatus;
+
+    return {
+      ok: !result.partial,
+      message: [
+        result.partial
+          ? `Default policy setup partially completed. Missing: ${result.missing.join(", ")}.`
+          : "Default sandbox seller policies created and synced.",
+        `Payment: ${status.paymentPolicy.policyName ?? status.paymentPolicy.status}.`,
+        `Return: ${status.returnPolicy.policyName ?? status.returnPolicy.status}.`,
+        `Fulfillment: ${status.fulfillmentPolicy.policyName ?? status.fulfillmentPolicy.status}.`
+      ].join("\n")
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Default seller policy creation failed."
+    };
+  }
+}
+
 async function setupEbayLocationFromTelegram({ supabase, userId }: ActionContext) {
   try {
     const result = await ensureInventoryLocation({ supabase, userId });
@@ -1067,7 +1093,7 @@ async function setupEbayLocationFromTelegram({ supabase, userId }: ActionContext
 async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
   const { data, error } = await supabase
     .from("listing_drafts")
-    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,quantity,price,optimized_image_urls")
+    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls")
     .eq("user_id", userId)
     .eq("status", "approved")
     .limit(quantity);

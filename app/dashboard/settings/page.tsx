@@ -45,7 +45,11 @@ export default async function SettingsPage({
         paymentPolicy={account?.payment_policy_name ?? account?.payment_policy_id}
         returnPolicy={account?.return_policy_name ?? account?.return_policy_id}
         fulfillmentPolicy={account?.fulfillment_policy_name ?? account?.fulfillment_policy_id}
-        inventoryLocation={account?.inventory_location_name ?? account?.inventory_location_key}
+        inventoryLocation={
+          account?.inventory_location_key
+            ? `${account.inventory_location_name ?? account.inventory_location_key} (Ready)`
+            : null
+        }
       />
 
       <section className="rounded-lg border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">

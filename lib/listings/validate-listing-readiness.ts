@@ -2,13 +2,16 @@ import type { EbayAccountRecord } from "@/lib/ebay/account";
 import { validateImageUrl } from "@/lib/images/validate-image";
 
 export interface ListingReadinessDraft {
+  id?: string | null;
   status?: string | null;
   ebay_title?: string | null;
   ebay_description?: string | null;
   ebay_category_id?: string | null;
   item_specifics?: unknown;
+  condition?: string | null;
   quantity?: number | string | null;
   price?: number | string | null;
+  supplier_sku?: string | null;
   optimized_image_urls?: string[] | null;
 }
 
@@ -34,6 +37,8 @@ export async function validateListingReadiness({
   const quantity = Number(draft.quantity ?? 0);
   const imageUrls = Array.isArray(draft.optimized_image_urls) ? draft.optimized_image_urls.filter(Boolean) : [];
   const fallbackCategoryId = process.env.EBAY_SANDBOX_FALLBACK_CATEGORY_ID?.trim();
+  const skuSource = draft.supplier_sku?.trim() || draft.id?.trim() || "";
+  const normalizedSku = skuSource.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 50);
 
   if (draft.status !== "approved") {
     missing.push("Approve this draft before publishing.");
@@ -57,8 +62,18 @@ export async function validateListingReadiness({
     missing.push("quantity greater than 0");
   }
 
+  if (!normalizedSku || normalizedSku.length < 3) {
+    missing.push("SKU");
+  } else if (!draft.supplier_sku?.trim()) {
+    warnings.push("Supplier SKU is missing; the draft ID will be used as the sandbox SKU.");
+  }
+
   if (!draft.ebay_category_id?.trim() && !fallbackCategoryId) {
     missing.push("eBay category ID");
+  }
+
+  if (!isValidSandboxCondition(draft.condition)) {
+    missing.push("valid eBay condition");
   }
 
   if (!isPlainRecord(draft.item_specifics) || Object.keys(draft.item_specifics).length === 0) {
@@ -140,4 +155,29 @@ function isValidHttpUrl(value: string) {
   } catch {
     return false;
   }
+}
+
+function isValidSandboxCondition(value?: string | null) {
+  if (!value) {
+    return false;
+  }
+
+  const allowed = new Set([
+    "NEW",
+    "LIKE_NEW",
+    "NEW_OTHER",
+    "USED",
+    "USED_EXCELLENT",
+    "USED_VERY_GOOD",
+    "USED_GOOD",
+    "USED_ACCEPTABLE",
+    "FOR_PARTS_OR_NOT_WORKING",
+    "CERTIFIED_REFURBISHED",
+    "EXCELLENT_REFURBISHED",
+    "VERY_GOOD_REFURBISHED",
+    "GOOD_REFURBISHED",
+    "SELLER_REFURBISHED"
+  ]);
+
+  return allowed.has(value.trim().toUpperCase());
 }

@@ -21,6 +21,7 @@ export const TelegramIntentNameSchema = z.enum([
   "REVISE_DRAFT_HELP",
   "SHOW_EBAY_READINESS",
   "SYNC_EBAY_POLICIES",
+  "CREATE_DEFAULT_EBAY_POLICIES",
   "SETUP_EBAY_LOCATION",
   "PUBLISH_SAFE_DRAFTS_SANDBOX",
   "SHOW_FAILED_TASKS",
@@ -265,6 +266,14 @@ export function parseTelegramIntentHeuristically(
       clarifying_question: "Production publishing hazırda safety üçün bağlıdır. Sandbox-da test etmək istəyirsən?",
       safe_response: "Production publishing safety üçün bağlıdır. Sandbox test edə bilərəm.",
       parameters: { ...parameters, publish_mode: null, user_question: message }
+    });
+  }
+
+  if (isCreateDefaultEbayPoliciesRequest(text)) {
+    return makeIntent("CREATE_DEFAULT_EBAY_POLICIES", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.9,
+      safe_response: "Default sandbox seller policies yaradılır."
     });
   }
 
@@ -954,6 +963,10 @@ function isEbayReadinessRequest(text: string) {
 
 function isEbayPolicySyncRequest(text: string) {
   return /(seller polic|business polic|payment polic|return polic|fulfillment polic|policy|policies).*(sync|sinx|yenile|yenilə|et)/.test(text);
+}
+
+function isCreateDefaultEbayPoliciesRequest(text: string) {
+  return /(seller polic|business polic|payment polic|return polic|fulfillment polic|policy|policies).*(yarat|create|default|qur)/.test(text);
 }
 
 function isEbayLocationSetupRequest(text: string) {

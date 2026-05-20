@@ -46,7 +46,7 @@ export async function POST(_request: Request, { params }: { params: { draftId: s
         userId: user.id,
         level: "warning",
         module: "ebay_publish",
-        message: "ebay_publish_validation_failed",
+        message: "ebay_publish_preflight_failed",
         metadata: { draftId: parsedParams.draftId, status: draft.status }
       });
 

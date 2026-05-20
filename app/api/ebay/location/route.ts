@@ -10,6 +10,7 @@ import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/ap
 const locationSchema = z.object({
   merchantLocationKey: z.string().min(3).max(50).optional(),
   name: z.string().min(2).max(80).optional(),
+  addressLine1: z.string().min(2).max(128).optional(),
   country: z.string().length(2).default("US"),
   postalCode: z.string().min(3).max(16).optional(),
   city: z.string().max(128).optional(),

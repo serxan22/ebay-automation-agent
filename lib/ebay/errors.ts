@@ -25,9 +25,12 @@ export function getEbayErrorRecommendation(code: string) {
     MISSING_POLICY_ID:
       "Business Policies are active, but no payment/return/fulfillment policies exist yet. Click Create default seller policies or create them manually in seller settings.",
     MISSING_LOCATION: "Create or select an eBay inventory location key.",
+    INVALID_SHIPPING_SERVICE:
+      "Invalid shipping service code for fulfillment policy. The app will retry with another sandbox-safe service.",
     INVALID_CATEGORY: "Review the suggested eBay category and required item specifics.",
     INVALID_ASPECTS: "Review item specifics for the category and remove unsupported or empty values.",
     IMAGE_ERROR: "Check optimized image URLs and make sure eBay can access them.",
+    INVALID_CONDITION: "Use a supported eBay condition such as NEW before publishing.",
     DUPLICATE_SKU: "Use a unique SKU or revise the existing inventory item.",
     RATE_LIMIT: "Pause automation and retry after the eBay API limit resets.",
     NOT_FOUND: "Confirm the requested eBay resource exists in the sandbox seller account.",
@@ -52,6 +55,10 @@ export function classifyEbayError(status: number, payload: unknown) {
     return "RATE_LIMIT";
   }
 
+  if (/shipping service|domesticshippingservice|shippingservicecode|shippingservice/.test(text)) {
+    return "INVALID_SHIPPING_SERVICE";
+  }
+
   if (isSellingPolicyManagementEligibilityError(payload)) {
     return "SELLING_POLICY_NOT_OPTED_IN";
   }
@@ -60,7 +67,7 @@ export function classifyEbayError(status: number, payload: unknown) {
     return "MISSING_POLICY_ID";
   }
 
-  if (/merchantlocationkey|inventory location|location key|location/.test(text)) {
+  if (/merchantlocationkey|inventory location|location key|merchant location|warehouse|postal|address|location/.test(text)) {
     return "MISSING_LOCATION";
   }
 
@@ -76,6 +83,10 @@ export function classifyEbayError(status: number, payload: unknown) {
     return "IMAGE_ERROR";
   }
 
+  if (/condition/.test(text)) {
+    return "INVALID_CONDITION";
+  }
+
   if (/duplicate|sku already|inventory item already|conflict/.test(text) || status === 409) {
     return "DUPLICATE_SKU";
   }
@@ -86,7 +97,7 @@ export function classifyEbayError(status: number, payload: unknown) {
 export function isSellingPolicyManagementEligibilityError(payload: unknown) {
   const text = stringifyEbayPayload(payload).toLowerCase();
 
-  return text.includes("20403") || text.includes("user is not eligible for business policy");
+  return text.includes("user is not eligible for business policy");
 }
 
 export function stringifyEbayPayload(payload: unknown) {

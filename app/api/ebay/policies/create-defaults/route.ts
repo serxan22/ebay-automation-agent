@@ -22,8 +22,13 @@ export async function POST() {
 
     return NextResponse.json({
       ok: true,
-      message: "Default sandbox seller policies created and synced.",
+      partial: result.partial,
+      message: result.partial
+        ? buildPartialPolicyMessage(result.missing, result.policyStatus)
+        : "Default sandbox seller policies created and synced.",
       created: result.created,
+      policyStatus: result.policyStatus,
+      missing: result.missing,
       policies: result.policies,
       account: result.account
     });
@@ -62,4 +67,36 @@ export async function POST() {
       { status: 400 }
     );
   }
+}
+
+function buildPartialPolicyMessage(
+  missing: string[],
+  policyStatus: Record<string, { status: string; error?: string; policyName?: string | null }>
+) {
+  const createdOrStored = [
+    policyStatus.paymentPolicy?.policyName ? `Payment policy: ${policyStatus.paymentPolicy.policyName}` : "",
+    policyStatus.returnPolicy?.policyName ? `Return policy: ${policyStatus.returnPolicy.policyName}` : "",
+    policyStatus.fulfillmentPolicy?.policyName ? `Fulfillment policy: ${policyStatus.fulfillmentPolicy.policyName}` : ""
+  ].filter(Boolean);
+  const fulfillmentError = policyStatus.fulfillmentPolicy?.error;
+  const hasPaymentAndReturn = Boolean(policyStatus.paymentPolicy?.policyName && policyStatus.returnPolicy?.policyName);
+
+  if (missing.includes("fulfillment policy") && hasPaymentAndReturn) {
+    return [
+      "Payment and return policies were created, but fulfillment policy failed because sandbox rejected the shipping service code.",
+      fulfillmentError ? `Last fulfillment error: ${fulfillmentError}` : "",
+      "Click Create default seller policies again to retry the missing policy.",
+      createdOrStored.length ? `Current policies: ${createdOrStored.join("; ")}.` : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  return [
+    `Default seller policy setup is partially complete. Missing: ${missing.join(", ")}.`,
+    "Click Create default seller policies again to retry missing policies.",
+    createdOrStored.length ? `Current policies: ${createdOrStored.join("; ")}.` : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
 }

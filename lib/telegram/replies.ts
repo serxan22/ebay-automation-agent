@@ -87,6 +87,7 @@ export function buildTelegramReply(intent: TelegramIntent, result: AgentTaskResu
     intent.intent === "REVISE_DRAFT_HELP" ||
     intent.intent === "SHOW_EBAY_READINESS" ||
     intent.intent === "SYNC_EBAY_POLICIES" ||
+    intent.intent === "CREATE_DEFAULT_EBAY_POLICIES" ||
     intent.intent === "SETUP_EBAY_LOCATION" ||
     intent.intent === "PUBLISH_SAFE_DRAFTS_SANDBOX" ||
     intent.intent === "UPDATE_BLOCKED_CATEGORY" ||

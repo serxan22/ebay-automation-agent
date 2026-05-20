@@ -76,8 +76,12 @@ export async function publishListingDraftToEbaySandbox({
       userId,
       marketplace: resolvedMarketplaceId
     });
+    const product = getDraftProduct(draft);
     const readiness = await validateListingReadiness({
-      draft,
+      draft: {
+        ...draft,
+        supplier_sku: product?.supplier_sku ?? null
+      },
       account: accountForReadiness,
       checkImageAccessibility: true
     });
@@ -88,7 +92,7 @@ export async function publishListingDraftToEbaySandbox({
         userId,
         level: "warning",
         module: "ebay_publish",
-        message: "ebay_publish_validation_failed",
+        message: "ebay_publish_preflight_failed",
         metadata: {
           draftId,
           score: readiness.score,
@@ -98,7 +102,7 @@ export async function publishListingDraftToEbaySandbox({
       });
 
       throw new EbayIntegrationError(
-        `Listing is not ready for sandbox publishing: ${readiness.missing.join(", ")}.`,
+        `Cannot publish yet: missing ${readiness.missing.join(", ")}.`,
         "PUBLISH_READINESS_FAILED",
         getEbayErrorRecommendation("PUBLISH_READINESS_FAILED"),
         readiness
@@ -113,7 +117,6 @@ export async function publishListingDraftToEbaySandbox({
     });
     validateAccountForPublish(account);
 
-    const product = getDraftProduct(draft);
     const sku = buildEbaySku(draft, product?.supplier_sku ?? undefined);
     const aspects = sanitizeAspects(draft.item_specifics ?? {});
     const categoryId = draft.ebay_category_id ?? process.env.EBAY_SANDBOX_FALLBACK_CATEGORY_ID ?? "";
@@ -206,6 +209,15 @@ export async function publishListingDraftToEbaySandbox({
       metadata: { draftId, sku, offerId: offer.offerId, listingId }
     });
 
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "success",
+      module: "ebay_publish",
+      message: "ebay_publish_success",
+      metadata: { draftId, sku, offerId: offer.offerId, listingId }
+    });
+
     return { listingId, offerId: offer.offerId, sku };
   } catch (error) {
     await recordDraftPublishError({
@@ -265,10 +277,12 @@ export async function recordDraftPublishError({
 
 export function normalizePublishError(error: unknown) {
   if (error instanceof EbayIntegrationError) {
+    const recommendation = error.recommendation ?? getEbayErrorRecommendation(error.code);
+
     return {
       code: error.code,
-      message: error.message,
-      recommendation: error.recommendation ?? getEbayErrorRecommendation(error.code),
+      message: getConciseEbayErrorMessage(error),
+      recommendation,
       details: error.details ? { ebay: error.details, status: error.status } : { status: error.status }
     };
   }
@@ -281,6 +295,18 @@ export function normalizePublishError(error: unknown) {
     recommendation: getEbayErrorRecommendation("PUBLISH_FAILED"),
     details: { message }
   };
+}
+
+function getConciseEbayErrorMessage(error: EbayIntegrationError) {
+  if (error.code === "INVALID_SHIPPING_SERVICE") {
+    return "Invalid shipping service code for fulfillment policy. The app will retry with another sandbox-safe service.";
+  }
+
+  if (error.code === "SELLING_POLICY_NOT_OPTED_IN") {
+    return "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again.";
+  }
+
+  return error.message;
 }
 
 async function loadDraftForPublish({

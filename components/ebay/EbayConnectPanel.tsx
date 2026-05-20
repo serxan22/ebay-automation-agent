@@ -35,6 +35,8 @@ interface ProgramStatus {
   recommendation?: string;
 }
 
+type MessageTone = "success" | "error" | "warning";
+
 export function EbayConnectPanel({
   statusMessage,
   statusTone = "success",
@@ -53,7 +55,7 @@ export function EbayConnectPanel({
 }: EbayConnectPanelProps) {
   const router = useRouter();
   const [message, setMessage] = useState(statusMessage ?? "");
-  const [messageTone, setMessageTone] = useState(statusTone);
+  const [messageTone, setMessageTone] = useState<MessageTone>(statusTone);
   const [busy, setBusy] = useState<"policies" | "createDefaults" | "location" | "disconnect" | "optIn" | null>(null);
   const [programStatus, setProgramStatus] = useState<ProgramStatus | null>(null);
   const [programLoading, setProgramLoading] = useState(false);
@@ -113,9 +115,13 @@ export function EbayConnectPanel({
       body:
         action === "location"
           ? JSON.stringify({
-              name: "Seller Automation Sandbox Warehouse",
+              merchantLocationKey: "default-sandbox-location",
+              name: "Default Sandbox Warehouse",
+              addressLine1: "123 Market Street",
               country: "US",
-              postalCode: "10001"
+              city: "San Jose",
+              stateOrProvince: "CA",
+              postalCode: "95125"
             })
           : undefined
     });
@@ -135,7 +141,7 @@ export function EbayConnectPanel({
           : "Inventory location checked and saved."
         : payload.code === "SELLING_POLICY_NOT_OPTED_IN"
           ? "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again."
-        : `${payload.error ?? "Action failed."}${payload.recommendation ? ` ${payload.recommendation}` : ""}`
+        : joinErrorAndRecommendation(payload.error ?? "Action failed.", payload.recommendation)
     );
 
     if (payload.ok) {
@@ -171,16 +177,21 @@ export function EbayConnectPanel({
     setMessage("");
 
     const response = await fetch("/api/ebay/policies/create-defaults", { method: "POST" });
-    const payload = (await response.json()) as { ok?: boolean; message?: string; error?: string; recommendation?: string };
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      partial?: boolean;
+      message?: string;
+      error?: string;
+      recommendation?: string;
+      policyStatus?: Record<string, { status: string; error?: string }>;
+    };
 
     setBusy(null);
-    setMessageTone(payload.ok ? "success" : "error");
+    setMessageTone(payload.ok ? (payload.partial ? "warning" : "success") : "error");
     setMessage(
       payload.ok
-        ? payload.message ?? "Default sandbox seller policies created and synced."
-        : `${payload.error ?? "Default seller policy creation failed."}${
-            payload.recommendation ? ` ${payload.recommendation}` : ""
-          }`
+        ? `${payload.message ?? "Default sandbox seller policies created and synced."}${formatPolicyStatus(payload.policyStatus)}`
+        : joinErrorAndRecommendation(payload.error ?? "Default seller policy creation failed.", payload.recommendation)
     );
 
     if (payload.ok) {
@@ -353,11 +364,55 @@ function formatDateTime(value?: string | null) {
   }).format(new Date(value));
 }
 
-function getMessageClassName(tone: "success" | "error") {
+function formatPolicyStatus(policyStatus?: Record<string, { status: string; error?: string }>) {
+  if (!policyStatus) {
+    return "";
+  }
+
+  const labels: Record<string, string> = {
+    paymentPolicy: "Payment policy",
+    returnPolicy: "Return policy",
+    fulfillmentPolicy: "Fulfillment policy"
+  };
+  const summary = Object.entries(labels)
+    .map(([key, label]) => {
+      const status = policyStatus[key];
+      if (!status) {
+        return `${label}: Missing`;
+      }
+
+      if (status.status === "error") {
+        return `${label}: Error`;
+      }
+
+      if (status.status === "created") {
+        return `${label}: Created`;
+      }
+
+      return status.status === "stored" ? `${label}: Stored` : `${label}: Missing`;
+    })
+    .join("; ");
+
+  return summary ? ` ${summary}.` : "";
+}
+
+function joinErrorAndRecommendation(error: string, recommendation?: string) {
+  if (!recommendation || recommendation === error || error.includes(recommendation)) {
+    return error;
+  }
+
+  return `${error} ${recommendation}`;
+}
+
+function getMessageClassName(tone: MessageTone) {
   const base = "mt-4 rounded-md border p-3 text-sm";
 
   if (tone === "error") {
     return `${base} border-coral-200 bg-coral-50 text-coral-800 dark:border-coral-500/20 dark:bg-coral-500/10 dark:text-coral-200`;
+  }
+
+  if (tone === "warning") {
+    return `${base} border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100`;
   }
 
   return `${base} border-mint-200 bg-mint-50 text-mint-900 dark:border-mint-500/20 dark:bg-mint-500/10 dark:text-mint-100`;

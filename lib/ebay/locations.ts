@@ -1,12 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getValidEbayAccessToken } from "@/lib/ebay/account";
-import { ebayFetch } from "@/lib/ebay/client";
-import { EbayIntegrationError } from "@/lib/ebay/errors";
+import { ebayFetch, getEbayConfig } from "@/lib/ebay/client";
+import { EbayIntegrationError, getEbayErrorRecommendation } from "@/lib/ebay/errors";
 
 export interface EbayInventoryLocationInput {
   merchantLocationKey: string;
   name: string;
+  addressLine1?: string;
   country: string;
   postalCode?: string;
   city?: string;
@@ -54,6 +55,7 @@ export async function createInventoryLocation(accessToken: string, input: EbayIn
       locationTypes: ["WAREHOUSE"],
       location: {
         address: {
+          addressLine1: input.addressLine1,
           country: input.country,
           postalCode: input.postalCode,
           city: input.city,
@@ -75,6 +77,16 @@ export async function ensureInventoryLocation({
   input?: Partial<EbayInventoryLocationInput>;
   marketplaceId?: string;
 }) {
+  const config = getEbayConfig();
+
+  if (config.environment !== "sandbox") {
+    throw new EbayIntegrationError(
+      "Inventory location setup is available for sandbox only.",
+      "PRODUCTION_DISABLED",
+      getEbayErrorRecommendation("PRODUCTION_DISABLED")
+    );
+  }
+
   await logAutomationEvent({
     supabase,
     userId,
@@ -89,8 +101,15 @@ export async function ensureInventoryLocation({
     userId,
     marketplace: marketplaceId
   });
-  const merchantLocationKey =
-    input?.merchantLocationKey ?? account.inventory_location_key ?? defaultSandboxInventoryLocationKey;
+  const merchantLocationKey = input?.merchantLocationKey ?? defaultSandboxInventoryLocationKey;
+  const locationDefaults = {
+    name: input?.name ?? "Default Sandbox Warehouse",
+    addressLine1: input?.addressLine1 ?? "123 Market Street",
+    country: input?.country ?? "US",
+    postalCode: input?.postalCode ?? "95125",
+    city: input?.city ?? "San Jose",
+    stateOrProvince: input?.stateOrProvince ?? "CA"
+  };
   let location: EbayInventoryLocation | null = null;
 
   try {
@@ -102,22 +121,18 @@ export async function ensureInventoryLocation({
 
     await createInventoryLocation(accessToken, {
       merchantLocationKey,
-      name: input?.name ?? "Seller Automation Sandbox Warehouse",
-      country: input?.country ?? "US",
-      postalCode: input?.postalCode ?? "10001",
-      city: input?.city,
-      stateOrProvince: input?.stateOrProvince
+      ...locationDefaults
     });
     location = {
       merchantLocationKey,
-      name: input?.name ?? "Seller Automation Sandbox Warehouse",
+      name: locationDefaults.name,
       merchantLocationStatus: "ENABLED",
       location: {
         address: {
-          country: input?.country ?? "US",
-          postalCode: input?.postalCode ?? "10001",
-          city: input?.city,
-          stateOrProvince: input?.stateOrProvince
+          country: locationDefaults.country,
+          postalCode: locationDefaults.postalCode,
+          city: locationDefaults.city,
+          stateOrProvince: locationDefaults.stateOrProvince
         }
       }
     };
@@ -127,7 +142,7 @@ export async function ensureInventoryLocation({
     .from("ebay_accounts")
     .update({
       inventory_location_key: merchantLocationKey,
-      inventory_location_name: location.name ?? input?.name ?? "Seller Automation Sandbox Warehouse",
+      inventory_location_name: location.name ?? locationDefaults.name,
       inventory_location_status: location.merchantLocationStatus ?? "ENABLED",
       last_location_sync_at: new Date().toISOString()
     })
