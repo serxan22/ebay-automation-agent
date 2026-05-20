@@ -238,18 +238,22 @@ Sandbox publishing flow:
 2. Confirm a `public.ebay_accounts` row exists for your Supabase user with `status='connected'`, encrypted access/refresh tokens, and `marketplace='EBAY_US'`.
 3. Confirm `Business policies` is `Active`, or click `Enable seller policies` to request `SELLING_POLICY_MANAGEMENT` opt-in.
 4. Click `Sync seller policies` to load payment, return, and fulfillment policies from the sandbox Account API.
-5. Click `Setup location` to create/check the stable `default-sandbox-location` warehouse inventory location.
-6. Ensure a listing draft has a valid `ebay_category_id`, item specifics, price, quantity, and at least one image URL.
-7. Click `Publish sandbox` from `/dashboard/listings`.
+5. If sync says no policies exist, click `Create default seller policies`; this creates only missing sandbox payment, return, and fulfillment policies, then syncs their IDs into `public.ebay_accounts`.
+6. Click `Setup location` to create/check the stable `default-sandbox-location` warehouse inventory location.
+7. Ensure a listing draft has a valid `ebay_category_id`, item specifics, price, quantity, and at least one image URL.
+8. Click `Publish sandbox` from `/dashboard/listings`.
 
 The settings page can check eBay Account API programs through:
 
 ```text
 GET /api/ebay/programs
 POST /api/ebay/programs/opt-in-selling-policies
+POST /api/ebay/policies/create-defaults
 ```
 
 `GET /api/ebay/programs` calls `get_opted_in_programs` and reports whether `SELLING_POLICY_MANAGEMENT` is active. `POST /api/ebay/programs/opt-in-selling-policies` calls `program/opt_in` with `{ "programType": "SELLING_POLICY_MANAGEMENT" }`. eBay can take time to activate program opt-in, so wait and check again before retrying policy sync.
+
+Opt-in only enables the Business Policies feature. The sandbox seller still needs actual Payment, Return, and Fulfillment policies before Inventory API offers can be published. `POST /api/ebay/policies/create-defaults` checks existing policies first, creates only the missing defaults for `EBAY_US`, then runs policy sync to save the IDs.
 
 The publish flow calls:
 
@@ -267,7 +271,7 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 - ngrok offline: the Auth accepted URL must be reachable by eBay; update `EBAY_REDIRECT_URI` and the portal URL when the tunnel changes.
 - Callback not saving tokens: run `sql/phase4_ebay_oauth_states.sql` and confirm `SUPABASE_SERVICE_ROLE_KEY` and `ENCRYPTION_SECRET` exist in Vercel.
 - `20403 User is not eligible for Business Policy`: the sandbox seller is not opted into `SELLING_POLICY_MANAGEMENT`. Click `Enable seller policies`, wait for eBay to activate the program if needed, then click `Sync seller policies` again.
-- No policies found: create payment, return, and fulfillment policies in the sandbox seller account, then sync again.
+- No policies found: Business Policies are active, but no payment, return, and fulfillment policies exist yet. Click `Create default seller policies`, or create the policies manually in seller settings, then sync again.
 - Missing inventory location: click `Setup location` in Settings.
 - Invalid category/aspects: revise the draft category ID and item specifics JSON.
 - Image error: use publicly accessible HTTP/HTTPS image URLs; HTTPS is recommended.
@@ -281,11 +285,12 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 5. In Supabase, verify `public.ebay_accounts` has one connected row for the user.
 6. Confirm `Business policies` is `Active`, or click `Enable seller policies` and wait if eBay needs time to activate `SELLING_POLICY_MANAGEMENT`.
 7. Click `Sync seller policies`.
-8. Click `Setup location`.
-9. Create or revise a listing draft until readiness is green, then approve it.
-10. Click `Publish sandbox`.
+8. If no policy IDs are found, click `Create default seller policies`, then confirm payment, return, and fulfillment policy names appear.
+9. Click `Setup location`.
+10. Create or revise a listing draft until readiness is green, then approve it.
+11. Click `Publish sandbox`.
 
-Manual sandbox setup may still be required inside eBay: sandbox seller accounts often need `SELLING_POLICY_MANAGEMENT` enabled and payment, return, and fulfillment policies created before policy sync can succeed. After opt-in, the normal path is `Sync seller policies` → `Setup location` → approve draft → `Publish sandbox`.
+Manual sandbox setup may still be required inside eBay if the Account API rejects a default sandbox policy schema. After opt-in, the normal path is `Sync seller policies` → `Create default seller policies` if needed → `Setup location` → approve draft → `Publish sandbox`.
 
 ## Telegram Bot
 

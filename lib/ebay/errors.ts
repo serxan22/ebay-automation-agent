@@ -22,7 +22,8 @@ export function getEbayErrorRecommendation(code: string) {
     PUBLISH_READINESS_FAILED: "Fix the listed readiness issues before publishing to eBay sandbox.",
     SELLING_POLICY_NOT_OPTED_IN:
       "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again.",
-    MISSING_POLICY_ID: "Go to eBay settings and select payment, return, and fulfillment policies.",
+    MISSING_POLICY_ID:
+      "Business Policies are active, but no payment/return/fulfillment policies exist yet. Click Create default seller policies or create them manually in seller settings.",
     MISSING_LOCATION: "Create or select an eBay inventory location key.",
     INVALID_CATEGORY: "Review the suggested eBay category and required item specifics.",
     INVALID_ASPECTS: "Review item specifics for the category and remove unsupported or empty values.",

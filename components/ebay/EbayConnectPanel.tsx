@@ -54,9 +54,12 @@ export function EbayConnectPanel({
   const router = useRouter();
   const [message, setMessage] = useState(statusMessage ?? "");
   const [messageTone, setMessageTone] = useState(statusTone);
-  const [busy, setBusy] = useState<"policies" | "location" | "disconnect" | "optIn" | null>(null);
+  const [busy, setBusy] = useState<"policies" | "createDefaults" | "location" | "disconnect" | "optIn" | null>(null);
   const [programStatus, setProgramStatus] = useState<ProgramStatus | null>(null);
   const [programLoading, setProgramLoading] = useState(false);
+  const hasAllSellerPolicies = Boolean(paymentPolicy && returnPolicy && fulfillmentPolicy);
+  const canCreateDefaultPolicies =
+    connected && Boolean(programStatus?.sellingPolicyManagement?.active) && !hasAllSellerPolicies;
 
   const refreshPrograms = useCallback(async (showMessage = false) => {
     setProgramLoading(true);
@@ -163,6 +166,28 @@ export function EbayConnectPanel({
     }
   }
 
+  async function createDefaultSellerPolicies() {
+    setBusy("createDefaults");
+    setMessage("");
+
+    const response = await fetch("/api/ebay/policies/create-defaults", { method: "POST" });
+    const payload = (await response.json()) as { ok?: boolean; message?: string; error?: string; recommendation?: string };
+
+    setBusy(null);
+    setMessageTone(payload.ok ? "success" : "error");
+    setMessage(
+      payload.ok
+        ? payload.message ?? "Default sandbox seller policies created and synced."
+        : `${payload.error ?? "Default seller policy creation failed."}${
+            payload.recommendation ? ` ${payload.recommendation}` : ""
+          }`
+    );
+
+    if (payload.ok) {
+      router.refresh();
+    }
+  }
+
   async function disconnect() {
     setBusy("disconnect");
     setMessage("");
@@ -234,6 +259,15 @@ export function EbayConnectPanel({
         >
           <ShieldCheck size={16} /> {busy === "optIn" ? "Requesting..." : "Enable seller policies"}
         </Button>
+        {canCreateDefaultPolicies ? (
+          <Button
+            variant="secondary"
+            onClick={createDefaultSellerPolicies}
+            disabled={busy !== null || programLoading}
+          >
+            <Building2 size={16} /> {busy === "createDefaults" ? "Creating..." : "Create default seller policies"}
+          </Button>
+        ) : null}
         <Button
           variant="secondary"
           onClick={() => postAction("/api/ebay/policies/sync", "policies")}
