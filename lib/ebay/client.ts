@@ -109,7 +109,8 @@ export async function ebayFetch<T>({
   accessToken,
   body,
   marketplaceId = process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US",
-  timeoutMs
+  timeoutMs,
+  timeoutCode
 }: {
   path: string;
   method?: "GET" | "POST" | "PUT" | "DELETE";
@@ -117,6 +118,7 @@ export async function ebayFetch<T>({
   body?: unknown;
   marketplaceId?: string;
   timeoutMs?: number;
+  timeoutCode?: string;
 }): Promise<T> {
   const environment = getEbayConfig().environment;
   const controller = timeoutMs ? new AbortController() : null;
@@ -137,10 +139,11 @@ export async function ebayFetch<T>({
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
+      const code = timeoutCode ?? "PUBLISH_FAILED";
       throw new EbayIntegrationError(
         `eBay API request timed out after ${timeoutMs}ms.`,
-        "PUBLISH_FAILED",
-        getEbayErrorRecommendation("PUBLISH_FAILED"),
+        code,
+        getEbayErrorRecommendation(code),
         { path, method, timeoutMs }
       );
     }

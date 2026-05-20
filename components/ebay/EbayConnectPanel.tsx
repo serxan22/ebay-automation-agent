@@ -70,8 +70,13 @@ interface PolicyActionPayload {
 
 interface PolicyAttemptRecord {
   attemptNumber?: number;
+  serviceCode?: string;
   shippingServiceCode?: string;
+  schemaVariant?: string;
   schema?: string;
+  status?: string;
+  timeoutMs?: number;
+  message?: string;
   ebayErrors?: Array<{ errorId?: unknown; longMessage?: unknown }>;
 }
 
@@ -506,16 +511,22 @@ function PolicyAttemptDetailsPanel({ details }: { details: PolicyAttemptDetails 
           {attempts.slice(0, 8).map((attempt, index) => {
             const record = attempt && typeof attempt === "object" ? (attempt as PolicyAttemptRecord) : {};
             const firstError = Array.isArray(record.ebayErrors) ? record.ebayErrors[0] : null;
+            const serviceCode = record.serviceCode ?? record.shippingServiceCode ?? "Unknown service";
+            const schemaVariant = record.schemaVariant ?? record.schema ?? "unknown schema";
             const ebayMessage =
-              typeof firstError?.longMessage === "string"
+              typeof record.message === "string"
+                ? record.message
+                : record.status === "timeout"
+                  ? `eBay fulfillment policy request timed out${record.timeoutMs ? ` after ${record.timeoutMs}ms` : ""}`
+              : typeof firstError?.longMessage === "string"
                 ? firstError.longMessage
                 : typeof firstError?.errorId === "string" || typeof firstError?.errorId === "number"
                   ? String(firstError.errorId)
                   : "No eBay message captured";
             return (
-              <div key={`${record.shippingServiceCode ?? index}-${record.schema ?? index}`} className="rounded-md bg-white/70 p-2 dark:bg-white/[0.06]">
+              <div key={`${serviceCode}-${schemaVariant}-${index}`} className="rounded-md bg-white/70 p-2 dark:bg-white/[0.06]">
                 <p className="font-medium">
-                  {record.shippingServiceCode ?? "Unknown service"} · {record.schema ?? "unknown schema"}
+                  {serviceCode} · {schemaVariant} {record.status ? `· ${record.status}` : ""}
                 </p>
                 <p className="text-xs opacity-80">
                   Attempt {record.attemptNumber ?? index + 1} · {ebayMessage}

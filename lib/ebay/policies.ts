@@ -73,9 +73,16 @@ const defaultPolicyNames = {
   return: "Default Sandbox Return Policy",
   fulfillment: "Default Sandbox Fulfillment Policy"
 };
+const FULFILLMENT_POLICY_POST_TIMEOUT_MS = 20_000;
+const FULFILLMENT_POLICY_ROUTE_BUDGET_MS = 24_000;
 interface FulfillmentPolicyAttempt {
   attemptNumber: number;
-  schema: "official_string_free" | "boolean_zero_cost" | "buyer_paid_flat_rate";
+  schema:
+    | "free_shipping_minimal"
+    | "buyer_paid_minimal"
+    | "official_string_free"
+    | "boolean_zero_cost"
+    | "buyer_paid_flat_rate";
   shippingServiceCode: string;
   shippingCarrierCode: string;
   includeShippingCost: boolean;
@@ -83,6 +90,18 @@ interface FulfillmentPolicyAttempt {
   buyerResponsibleForShipping: boolean | "true" | "false";
   shippingCostValue?: string;
   additionalShippingCostValue?: string;
+}
+interface FulfillmentPolicyAttemptResult {
+  attemptNumber: number;
+  serviceCode: string;
+  shippingServiceCode: string;
+  schemaVariant: FulfillmentPolicyAttempt["schema"];
+  schema: FulfillmentPolicyAttempt["schema"];
+  status: "started" | "failed" | "timeout" | "skipped";
+  timeoutMs: number;
+  message?: string;
+  shippingCostIncluded: boolean;
+  ebayErrors: ReturnType<typeof extractEbayErrorSummaries>;
 }
 
 export async function getFulfillmentPolicies(accessToken: string, marketplaceId = "EBAY_US") {
@@ -185,18 +204,43 @@ export async function createDefaultFulfillmentPolicy({
   maxAttempts?: number;
 }) {
   let lastError: unknown;
+  const startedAt = Date.now();
   const discovery = await discoverShippingServicesWithFallback(accessToken);
   const candidates = getPreferredDomesticShippingServices(discovery.services);
   const attempts = buildFulfillmentPolicyAttempts(candidates).slice(0, maxAttempts);
-  const failedAttempts: Array<{
-    attemptNumber: number;
-    shippingServiceCode: string;
-    schema: string;
-    shippingCostIncluded: boolean;
-    ebayErrors: ReturnType<typeof extractEbayErrorSummaries>;
-  }> = [];
+  const attemptResults: FulfillmentPolicyAttemptResult[] = [];
 
   for (const attempt of attempts) {
+    if (Date.now() - startedAt >= FULFILLMENT_POLICY_ROUTE_BUDGET_MS) {
+      attemptResults.push({
+        attemptNumber: attempt.attemptNumber,
+        serviceCode: attempt.shippingServiceCode,
+        shippingServiceCode: attempt.shippingServiceCode,
+        schemaVariant: attempt.schema,
+        schema: attempt.schema,
+        status: "skipped",
+        timeoutMs: FULFILLMENT_POLICY_POST_TIMEOUT_MS,
+        message: "Fulfillment policy retry stopped before the route timeout budget was exhausted.",
+        shippingCostIncluded: attempt.includeShippingCost,
+        ebayErrors: []
+      });
+      break;
+    }
+
+    const attemptResult: FulfillmentPolicyAttemptResult = {
+      attemptNumber: attempt.attemptNumber,
+      serviceCode: attempt.shippingServiceCode,
+      shippingServiceCode: attempt.shippingServiceCode,
+      schemaVariant: attempt.schema,
+      schema: attempt.schema,
+      status: "started",
+      timeoutMs: FULFILLMENT_POLICY_POST_TIMEOUT_MS,
+      shippingCostIncluded: attempt.includeShippingCost,
+      ebayErrors: []
+    };
+
+    attemptResults.push(attemptResult);
+
     await logAutomationEvent({
       supabase,
       userId,
@@ -210,6 +254,8 @@ export async function createDefaultFulfillmentPolicy({
         shippingCarrierCode: attempt.shippingCarrierCode,
         shippingCostIncluded: attempt.includeShippingCost,
         schema: attempt.schema,
+        schemaVariant: attempt.schema,
+        timeoutMs: FULFILLMENT_POLICY_POST_TIMEOUT_MS,
         freeShipping: attempt.freeShipping,
         buyerResponsibleForShipping: attempt.buyerResponsibleForShipping,
         discoveryUsed: discovery.discovered,
@@ -224,18 +270,21 @@ export async function createDefaultFulfillmentPolicy({
         method: "POST",
         path: "/sell/account/v1/fulfillment_policy",
         body: buildDefaultFulfillmentPolicyBody(marketplaceId, attempt),
-        timeoutMs: 7_000
+        timeoutMs: FULFILLMENT_POLICY_POST_TIMEOUT_MS,
+        timeoutCode: "FULFILLMENT_POLICY_CREATE_FAILED"
       });
     } catch (error) {
       lastError = error;
       const ebayErrors = extractEbayErrorSummaries(error);
-      failedAttempts.push({
-        attemptNumber: attempt.attemptNumber,
-        shippingServiceCode: attempt.shippingServiceCode,
-        schema: attempt.schema,
-        shippingCostIncluded: attempt.includeShippingCost,
-        ebayErrors
-      });
+      const timedOut = isFulfillmentPolicyTimeoutError(error);
+
+      attemptResult.status = timedOut ? "timeout" : "failed";
+      attemptResult.message = timedOut
+        ? "eBay fulfillment policy request timed out"
+        : error instanceof Error
+          ? error.message
+          : "eBay fulfillment policy request failed";
+      attemptResult.ebayErrors = ebayErrors;
       await logAutomationEvent({
         supabase,
         userId,
@@ -249,25 +298,33 @@ export async function createDefaultFulfillmentPolicy({
           shippingCarrierCode: attempt.shippingCarrierCode,
           shippingCostIncluded: attempt.includeShippingCost,
           schema: attempt.schema,
+          schemaVariant: attempt.schema,
+          status: attemptResult.status,
+          timeoutMs: FULFILLMENT_POLICY_POST_TIMEOUT_MS,
+          message: attemptResult.message,
           discoveryUsed: discovery.discovered,
           ebayErrors
         }
       });
 
-      if (!isRetryablePolicyCreateError(error)) {
-        throw error;
+      if (!isRetryablePolicyCreateError(error) || timedOut || Date.now() - startedAt >= FULFILLMENT_POLICY_ROUTE_BUDGET_MS) {
+        break;
       }
     }
   }
 
   const summary = summarizePolicyCreateError(lastError);
+  const timedOut = attemptResults.some((attempt) => attempt.status === "timeout");
+  const attemptedShippingServices = Array.from(new Set(attemptResults.map((attempt) => attempt.serviceCode)));
   throw new EbayIntegrationError(
-    "Fulfillment policy creation failed after trying discovered and fallback shipping services.",
-    summary.code,
-    summary.recommendation,
+    timedOut
+      ? "eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details."
+      : "Fulfillment policy creation failed after trying discovered and fallback shipping services.",
+    summary.code === "TOKEN_EXPIRED" ? summary.code : "FULFILLMENT_POLICY_CREATE_FAILED",
+    getEbayErrorRecommendation(summary.code === "TOKEN_EXPIRED" ? summary.code : "FULFILLMENT_POLICY_CREATE_FAILED"),
     {
-      attempts: failedAttempts,
-      attemptedShippingServices: Array.from(new Set(failedAttempts.map((attempt) => attempt.shippingServiceCode))),
+      attempts: attemptResults,
+      attemptedShippingServices,
       discoveryUsed: discovery.discovered,
       discoveryFailed: !discovery.discovered,
       discoveryError: discovery.discoveryError,
@@ -371,7 +428,20 @@ export async function createDefaultSellerPolicies({
     }
   }
 
-  const synced = await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
+  const fulfillmentTimedOut = hasFulfillmentPolicyTimeout(errors.fulfillmentPolicy?.details);
+  const canSkipPostTimeoutSync =
+    fulfillmentTimedOut && !created.paymentPolicy && !created.returnPolicy && !created.fulfillmentPolicy;
+  const synced = canSkipPostTimeoutSync
+    ? {
+        account,
+        policies: {
+          paymentPolicy: chooseDefaultPolicy(existing.payment.paymentPolicies, marketplaceId) ?? buildStoredPolicyFallback("payment", account),
+          returnPolicy:
+            chooseDefaultPolicy(existing.returnPolicies.returnPolicies, marketplaceId) ?? buildStoredPolicyFallback("return", account),
+          fulfillmentPolicy: buildStoredPolicyFallback("fulfillment", account)
+        }
+      }
+    : await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
   const policyStatus = buildDefaultPolicyStatus(synced.policies, created, errors);
   const missing = getMissingPolicyNames(policyStatus);
   const partial = missing.length > 0;
@@ -507,7 +577,18 @@ export async function retryFulfillmentPolicy({
     errors.fulfillmentPolicy = summarizePolicyCreateError(error);
   }
 
-  const synced = await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
+  const fulfillmentTimedOut = hasFulfillmentPolicyTimeout(errors.fulfillmentPolicy?.details);
+  const synced = createdFulfillmentPolicy || !fulfillmentTimedOut
+    ? await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false })
+    : {
+        account,
+        policies: {
+          paymentPolicy: chooseDefaultPolicy(existing.payment.paymentPolicies, marketplaceId) ?? buildStoredPolicyFallback("payment", account),
+          returnPolicy:
+            chooseDefaultPolicy(existing.returnPolicies.returnPolicies, marketplaceId) ?? buildStoredPolicyFallback("return", account),
+          fulfillmentPolicy: buildStoredPolicyFallback("fulfillment", account)
+        }
+      };
   const policyStatus = buildDefaultPolicyStatus(
     synced.policies,
     { paymentPolicy: null, returnPolicy: null, fulfillmentPolicy: createdFulfillmentPolicy },
@@ -523,7 +604,9 @@ export async function retryFulfillmentPolicy({
     returnPolicyStored: Boolean(synced.policies.returnPolicy),
     message: fulfillmentPolicyStored
       ? "Fulfillment policy created and synced."
-      : "Payment and return policies are ready, but fulfillment policy creation failed after bounded retry attempts.",
+      : fulfillmentTimedOut
+        ? "eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details."
+        : "Payment and return policies are ready, but fulfillment policy creation failed after bounded retry attempts.",
     attempts: extractAttemptsFromPolicyError(errors.fulfillmentPolicy),
     errors,
     policyStatus,
@@ -730,8 +813,36 @@ function buildFulfillmentPolicyAttempts(candidates: EbayShippingService[]): Fulf
         { shippingService: "FedExGround" }
       ];
   const attempts: FulfillmentPolicyAttempt[] = [];
+  const uspsFirstClass = usableCandidates.find((candidate) => candidate.shippingService === "USPSFirstClass");
+
+  if (uspsFirstClass) {
+    attempts.push({
+      attemptNumber: attempts.length + 1,
+      schema: "free_shipping_minimal",
+      shippingServiceCode: "USPSFirstClass",
+      shippingCarrierCode: "USPS",
+      includeShippingCost: false,
+      freeShipping: true,
+      buyerResponsibleForShipping: false
+    });
+    attempts.push({
+      attemptNumber: attempts.length + 1,
+      schema: "buyer_paid_minimal",
+      shippingServiceCode: "USPSFirstClass",
+      shippingCarrierCode: "USPS",
+      includeShippingCost: true,
+      freeShipping: false,
+      buyerResponsibleForShipping: true,
+      shippingCostValue: "5.00",
+      additionalShippingCostValue: "0.00"
+    });
+  }
 
   for (const candidate of usableCandidates) {
+    if (candidate.shippingService === "USPSFirstClass") {
+      continue;
+    }
+
     attempts.push({
       attemptNumber: attempts.length + 1,
       schema: "official_string_free",
@@ -919,22 +1030,30 @@ async function createWithFallbackAttempts<T extends SellerPolicy>(
 function isRetryablePolicyCreateError(error: unknown) {
   return (
     error instanceof EbayIntegrationError &&
-    (error.status === 400 || error.code === "INVALID_SHIPPING_SERVICE" || Boolean(error.status && error.status >= 500))
+    (error.status === 400 ||
+      error.code === "INVALID_SHIPPING_SERVICE" ||
+      error.code === "FULFILLMENT_POLICY_CREATE_FAILED" ||
+      Boolean(error.status && error.status >= 500))
   );
 }
 
 function summarizePolicyCreateError(error: unknown): PolicyCreateErrorSummary {
   if (error instanceof EbayIntegrationError) {
+    const isFulfillmentFailure =
+      error.code === "FULFILLMENT_POLICY_CREATE_FAILED" || hasFulfillmentPolicyAttemptDetails(error.details);
+    const code = error.code === "PUBLISH_FAILED" && isFulfillmentFailure ? "FULFILLMENT_POLICY_CREATE_FAILED" : error.code;
     const message =
-      error.code === "INVALID_SHIPPING_SERVICE"
+      isFulfillmentFailure && hasFulfillmentPolicyTimeout(error.details)
+        ? "eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details."
+      : code === "INVALID_SHIPPING_SERVICE"
         ? "Invalid shipping service code for fulfillment policy. The app will retry with another sandbox-safe service."
         : error.message;
     const attemptedShippingServices = extractAttemptedShippingServicesFromDetails(error.details);
 
     return {
-      code: error.code,
+      code,
       message,
-      recommendation: error.recommendation ?? getEbayErrorRecommendation(error.code),
+      recommendation: error.recommendation ?? getEbayErrorRecommendation(code),
       details: error.details
         ? {
             ebay: error.details,
@@ -969,7 +1088,8 @@ function extractAttemptedShippingServicesFromDetails(details: unknown) {
       attempts
         .map((attempt) =>
           attempt && typeof attempt === "object"
-            ? (attempt as { shippingServiceCode?: unknown }).shippingServiceCode
+            ? ((attempt as { serviceCode?: unknown }).serviceCode ??
+                (attempt as { shippingServiceCode?: unknown }).shippingServiceCode)
             : null
         )
         .filter((value): value is string => typeof value === "string")
@@ -979,6 +1099,56 @@ function extractAttemptedShippingServicesFromDetails(details: unknown) {
 
 function hasDiscoveryFailure(details: unknown) {
   return Boolean(details && typeof details === "object" && "discoveryFailed" in details && (details as { discoveryFailed?: unknown }).discoveryFailed);
+}
+
+function hasFulfillmentPolicyAttemptDetails(details: unknown): boolean {
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+
+  return "attempts" in details || ("ebay" in details && hasFulfillmentPolicyAttemptDetails((details as { ebay?: unknown }).ebay));
+}
+
+function hasFulfillmentPolicyTimeout(details: unknown): boolean {
+  const attempts = getAttemptDetailsArray(details);
+
+  return attempts.some((attempt) => {
+    if (!attempt || typeof attempt !== "object") {
+      return false;
+    }
+
+    return (attempt as { status?: unknown }).status === "timeout";
+  });
+}
+
+function getAttemptDetailsArray(details: unknown): unknown[] {
+  if (!details || typeof details !== "object") {
+    return [];
+  }
+
+  if ("attempts" in details) {
+    const attempts = (details as { attempts?: unknown }).attempts;
+    return Array.isArray(attempts) ? attempts : [];
+  }
+
+  if ("ebay" in details) {
+    return getAttemptDetailsArray((details as { ebay?: unknown }).ebay);
+  }
+
+  return [];
+}
+
+function isFulfillmentPolicyTimeoutError(error: unknown): boolean {
+  if (!(error instanceof EbayIntegrationError)) {
+    return false;
+  }
+
+  const details = error.details;
+
+  return (
+    error.code === "FULFILLMENT_POLICY_CREATE_FAILED" &&
+    Boolean(details && typeof details === "object" && "timeoutMs" in details)
+  );
 }
 
 function extractEbayErrorSummaries(error: unknown) {

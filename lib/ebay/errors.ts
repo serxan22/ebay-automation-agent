@@ -27,6 +27,8 @@ export function getEbayErrorRecommendation(code: string) {
     MISSING_LOCATION: "Create or select an eBay inventory location key.",
     INVALID_SHIPPING_SERVICE:
       "Invalid shipping service code for fulfillment policy. The app will retry with another sandbox-safe service.",
+    FULFILLMENT_POLICY_CREATE_FAILED:
+      "Retry fulfillment policy from Settings. If eBay sandbox times out again, inspect Policy creation details and Vercel logs.",
     INVALID_CATEGORY: "Review the suggested eBay category and required item specifics.",
     INVALID_ASPECTS: "Review item specifics for the category and remove unsupported or empty values.",
     IMAGE_ERROR: "Check optimized image URLs and make sure eBay can access them.",
