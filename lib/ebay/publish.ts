@@ -145,7 +145,7 @@ export async function publishListingDraftToEbaySandbox({
 
     if (!account.fulfillment_policy_id && isSandboxPolicyFallbackAllowed()) {
       throw new EbayIntegrationError(
-        "Sandbox policy fallback is enabled, so readiness can test inventory setup, but eBay still requires a fulfillment policy before offer publish.",
+        "Sandbox policy fallback is enabled, so readiness and inventory item creation diagnostics can run. Offer publish is blocked until fulfillment policy exists.",
         "MISSING_POLICY_ID",
         "Run step-based fulfillment retry in Settings, then sync seller policies."
       );

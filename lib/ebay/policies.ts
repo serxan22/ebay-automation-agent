@@ -86,6 +86,7 @@ const defaultPolicyNames = {
 const FULFILLMENT_POLICY_POST_TIMEOUT_MS = 20_000;
 const FULFILLMENT_POLICY_ROUTE_BUDGET_MS = 24_000;
 const FULFILLMENT_POLICY_STEP_TIMEOUT_MS = 8_000;
+const FULFILLMENT_POLICY_LONG_TEST_TIMEOUT_MS = 45_000;
 interface FulfillmentPolicyAttempt {
   attemptNumber: number;
   schema:
@@ -114,6 +115,21 @@ export interface FulfillmentPolicyAttemptResult {
   message?: string;
   shippingCostIncluded: boolean;
   ebayErrors: ReturnType<typeof extractEbayErrorSummaries>;
+}
+
+export interface FulfillmentPolicyLongTestResult {
+  ok: boolean;
+  created: boolean;
+  timedOut: boolean;
+  timeoutMs: number;
+  serviceCode: string;
+  schemaVariant: FulfillmentPolicyAttempt["schema"];
+  ebayResponse: unknown;
+  ebayErrors: ReturnType<typeof extractEbayErrorSummaries>;
+  recommendation: string;
+  fulfillmentPolicyStored: boolean;
+  message: string;
+  syncError?: string | null;
 }
 
 export async function getFulfillmentPolicies(accessToken: string, marketplaceId = "EBAY_US") {
@@ -823,6 +839,159 @@ export async function retryFulfillmentPolicyStep({
   }
 }
 
+export async function runFulfillmentPolicyLongTest({
+  supabase,
+  userId,
+  marketplaceId = "EBAY_US",
+  timeoutMs = FULFILLMENT_POLICY_LONG_TEST_TIMEOUT_MS
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  marketplaceId?: string;
+  timeoutMs?: number;
+}): Promise<FulfillmentPolicyLongTestResult> {
+  const config = getEbayConfig();
+
+  if (config.environment !== "sandbox") {
+    throw new EbayIntegrationError(
+      "Fulfillment policy diagnostics are available for sandbox only.",
+      "PRODUCTION_DISABLED",
+      getEbayErrorRecommendation("PRODUCTION_DISABLED")
+    );
+  }
+
+  const serviceCode = "USPSFirstClass";
+  const schemaVariant: FulfillmentPolicyAttempt["schema"] = "buyer_paid_minimal";
+  const attempt: FulfillmentPolicyAttempt = {
+    attemptNumber: 1,
+    schema: schemaVariant,
+    shippingServiceCode: serviceCode,
+    shippingCarrierCode: "USPS",
+    includeShippingCost: true,
+    freeShipping: false,
+    buyerResponsibleForShipping: true,
+    shippingCostValue: "5.00",
+    additionalShippingCostValue: "0.00"
+  };
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "ebay_policies",
+    message: "ebay_fulfillment_long_test_started",
+    metadata: {
+      marketplaceId,
+      serviceCode,
+      schemaVariant,
+      timeoutMs
+    }
+  });
+
+  const { accessToken } = await getValidEbayAccessToken({
+    supabase,
+    userId,
+    marketplace: marketplaceId
+  });
+
+  let created = false;
+  let timedOut = false;
+  let ebayResponse: unknown = null;
+  let ebayErrors: ReturnType<typeof extractEbayErrorSummaries> = [];
+  let message = "Long fulfillment policy diagnostic finished.";
+
+  try {
+    ebayResponse = await ebayFetch<SellerPolicy>({
+      accessToken,
+      marketplaceId,
+      method: "POST",
+      path: "/sell/account/v1/fulfillment_policy",
+      body: buildDefaultFulfillmentPolicyBody(marketplaceId, attempt),
+      timeoutMs,
+      timeoutCode: "FULFILLMENT_POLICY_CREATE_FAILED"
+    });
+    created = true;
+    message = "Long fulfillment policy diagnostic created a fulfillment policy.";
+  } catch (error) {
+    timedOut = isFulfillmentPolicyTimeoutError(error);
+    ebayErrors = extractEbayErrorSummaries(error);
+    ebayResponse = extractSafeEbayResponse(error);
+    message = timedOut
+      ? "eBay sandbox timed out while creating the fulfillment policy."
+      : error instanceof Error
+        ? error.message
+        : "eBay fulfillment policy long diagnostic failed.";
+
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: timedOut ? "warning" : "error",
+      module: "ebay_policies",
+      message: timedOut ? "ebay_fulfillment_long_test_timeout" : "ebay_fulfillment_long_test_failed",
+      metadata: {
+        marketplaceId,
+        serviceCode,
+        schemaVariant,
+        timeoutMs,
+        message,
+        ebayErrors,
+        ebayResponse
+      }
+    });
+  }
+
+  let fulfillmentPolicyStored = false;
+  let syncError: string | null = null;
+
+  try {
+    const synced = await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
+    fulfillmentPolicyStored = Boolean(synced.policies.fulfillmentPolicy);
+  } catch (error) {
+    syncError = error instanceof Error ? error.message : "Policy sync failed after long diagnostic.";
+  }
+
+  const ok = created || fulfillmentPolicyStored;
+  const recommendation = fulfillmentPolicyStored
+    ? "Fulfillment policy is now stored. Continue to listing readiness and sandbox publish."
+    : timedOut
+      ? "eBay sandbox is timing out while creating fulfillment policies. Payment, return, OAuth, and inventory are ready. This blocks real sandbox offer publish because eBay requires a fulfillment policy ID."
+      : "eBay returned a fulfillment policy error. Inspect the response details, then retry later or test with a different sandbox seller.";
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: ok ? "success" : timedOut ? "warning" : "error",
+    module: "ebay_policies",
+    message: ok ? "ebay_fulfillment_long_test_success" : "ebay_fulfillment_long_test_inconclusive",
+    metadata: {
+      marketplaceId,
+      serviceCode,
+      schemaVariant,
+      timeoutMs,
+      created,
+      timedOut,
+      fulfillmentPolicyStored,
+      recommendation,
+      syncError
+    }
+  });
+
+  return {
+    ok,
+    created,
+    timedOut,
+    timeoutMs,
+    serviceCode,
+    schemaVariant,
+    ebayResponse,
+    ebayErrors,
+    recommendation,
+    fulfillmentPolicyStored,
+    message: ok ? "Fulfillment policy created or synced." : message,
+    syncError
+  };
+}
+
 export async function syncSellerPolicies({
   supabase,
   userId,
@@ -1464,6 +1633,26 @@ function extractEbayErrorSummaries(error: unknown) {
         : undefined
     };
   });
+}
+
+function extractSafeEbayResponse(error: unknown) {
+  if (error instanceof EbayIntegrationError) {
+    return {
+      code: error.code,
+      status: error.status,
+      message: error.message,
+      details: error.details ?? null
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message
+    };
+  }
+
+  return null;
 }
 
 function extractAttemptedShippingServices(error?: PolicyCreateErrorSummary) {

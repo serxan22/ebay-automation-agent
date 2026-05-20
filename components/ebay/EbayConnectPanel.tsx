@@ -42,11 +42,13 @@ type BusyAction =
   | "retryFulfillment"
   | "retryFulfillmentStep"
   | "autoFulfillmentSteps"
+  | "longFulfillmentTest"
   | "location"
   | "disconnect"
   | "optIn"
   | "discoverServices";
 const CLIENT_ACTION_TIMEOUT_MS = 25_000;
+const CLIENT_LONG_TEST_TIMEOUT_MS = 55_000;
 
 interface ShippingServiceSummary {
   shippingService: string;
@@ -87,6 +89,22 @@ interface FulfillmentStepPayload {
   message?: string;
   error?: string;
   recommendation?: string;
+}
+
+interface FulfillmentLongTestPayload {
+  ok?: boolean;
+  created?: boolean;
+  timedOut?: boolean;
+  timeoutMs?: number;
+  serviceCode?: string;
+  schemaVariant?: string;
+  ebayResponse?: unknown;
+  ebayErrors?: Array<{ errorId?: unknown; longMessage?: unknown }>;
+  recommendation?: string;
+  fulfillmentPolicyStored?: boolean;
+  message?: string;
+  error?: string;
+  syncError?: string | null;
 }
 
 interface PolicyAttemptRecord {
@@ -335,6 +353,63 @@ export function EbayConnectPanel({
     return readJsonPayload<FulfillmentStepPayload>(response);
   }
 
+  async function runLongFulfillmentTest() {
+    setBusy("longFulfillmentTest");
+    setMessage("");
+
+    try {
+      const response = await fetchWithTimeout(
+        "/api/ebay/policies/fulfillment-long-test",
+        { method: "POST" },
+        CLIENT_LONG_TEST_TIMEOUT_MS
+      );
+      const payload = await readJsonPayload<FulfillmentLongTestPayload>(response);
+      const attempt: PolicyAttemptRecord = {
+        attemptNumber: 1,
+        serviceCode: payload.serviceCode ?? "USPSFirstClass",
+        shippingServiceCode: payload.serviceCode ?? "USPSFirstClass",
+        schemaVariant: payload.schemaVariant ?? "buyer_paid_minimal",
+        schema: payload.schemaVariant ?? "buyer_paid_minimal",
+        status: payload.fulfillmentPolicyStored || payload.created || payload.ok ? "success" : payload.timedOut ? "timeout" : "failed",
+        timeoutMs: payload.timeoutMs,
+        message: payload.message ?? payload.recommendation ?? payload.error,
+        ebayErrors: payload.ebayErrors
+      };
+
+      setFulfillmentStepHistory((current) => [...current, attempt]);
+      setPolicyAttemptDetails((current) => ({
+        ...current,
+        attempts: [...(Array.isArray(current?.attempts) ? current.attempts : []), attempt],
+        errors: {
+          ...(current?.errors ?? {}),
+          longFulfillmentTest: {
+            ebayResponse: payload.ebayResponse,
+            syncError: payload.syncError ?? null,
+            recommendation: payload.recommendation
+          }
+        }
+      }));
+      setMessageTone(payload.fulfillmentPolicyStored || payload.created || payload.ok ? "success" : "error");
+      setMessage(
+        payload.fulfillmentPolicyStored || payload.created || payload.ok
+          ? payload.message ?? "Fulfillment policy created or synced."
+          : payload.timedOut
+            ? "eBay sandbox is timing out while creating fulfillment policies. Payment, return, OAuth, and inventory are ready. This blocks real sandbox offer publish because eBay requires a fulfillment policy ID."
+            : joinErrorAndRecommendation(payload.error ?? payload.message ?? "Long fulfillment diagnostic failed.", payload.recommendation)
+      );
+
+      if (payload.fulfillmentPolicyStored || payload.created || payload.ok) {
+        router.refresh();
+      }
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === "longFulfillmentTest" ? null : current));
+    }
+  }
+
   function handleFulfillmentStepPayload(payload: FulfillmentStepPayload) {
     const attempt = payload.attempt ?? (Array.isArray(payload.attempts) ? (payload.attempts[0] as PolicyAttemptRecord | undefined) : null);
 
@@ -554,6 +629,7 @@ export function EbayConnectPanel({
           busy={busy}
           onRetryNext={() => retryFulfillmentPolicyStep()}
           onAutoRun={autoRunFulfillmentSteps}
+          onLongTest={runLongFulfillmentTest}
         />
       ) : null}
       {shippingServices?.length ? <ShippingServicesPanel services={shippingServices} /> : null}
@@ -576,13 +652,15 @@ function ManualFulfillmentFallback({
   history,
   busy,
   onRetryNext,
-  onAutoRun
+  onAutoRun,
+  onLongTest
 }: {
   stepIndex: number;
   history: PolicyAttemptRecord[];
   busy: BusyAction | null;
   onRetryNext: () => void;
   onAutoRun: () => void;
+  onLongTest: () => void;
 }) {
   return (
     <div className="mt-4 rounded-md border border-ink-200 bg-ink-50 p-4 text-sm text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200">
@@ -599,7 +677,14 @@ function ManualFulfillmentFallback({
         <Button variant="secondary" onClick={onAutoRun} disabled={busy === "autoFulfillmentSteps"}>
           <RefreshCcw size={16} /> {busy === "autoFulfillmentSteps" ? "Running..." : "Auto-run attempts one by one"}
         </Button>
+        <Button variant="secondary" onClick={onLongTest} disabled={busy === "longFulfillmentTest"}>
+          <RefreshCcw size={16} /> {busy === "longFulfillmentTest" ? "Testing..." : "Run long fulfillment test"}
+        </Button>
       </div>
+      <p className="mt-3 text-xs opacity-80">
+        The long test tries one USPSFirstClass buyer-paid policy with a longer server timeout, then syncs seller policies once.
+        Offer publish remains blocked until a real fulfillment policy ID exists.
+      </p>
       {history.length ? (
         <div className="mt-3 space-y-2">
           <p className="font-medium">Fulfillment attempt history</p>
@@ -797,9 +882,9 @@ function joinErrorAndRecommendation(error: string, recommendation?: string) {
   return `${error} ${recommendation}`;
 }
 
-async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}) {
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = CLIENT_ACTION_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), CLIENT_ACTION_TIMEOUT_MS);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(input, {

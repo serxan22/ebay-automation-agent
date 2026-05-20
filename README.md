@@ -252,6 +252,7 @@ POST /api/ebay/programs/opt-in-selling-policies
 POST /api/ebay/policies/create-defaults
 POST /api/ebay/policies/retry-fulfillment
 POST /api/ebay/policies/retry-fulfillment-step
+POST /api/ebay/policies/fulfillment-long-test
 GET /api/ebay/policies/debug
 GET /api/ebay/shipping-services
 GET /api/system/health
@@ -266,6 +267,8 @@ The sandbox seller UI may not expose Business Policies reliably, so the app does
 Default fulfillment policy creation tries discovered EBAY_US services first and is capped at eight attempts so it returns a visible result instead of hanging. Fulfillment POST calls allow up to 20 seconds, and each attempt is recorded before the eBay request so timeout responses still show service code, schema variant, status, and message. The first `USPSFirstClass` attempts use minimal free-shipping and buyer-paid `$5` schemas; later attempts use official-style free shipping, boolean zero-cost shipping, and fallback services. Preferred service codes include `USPSFirstClass`, `USPSPriority`, `UPSGround`, `FedExHomeDelivery`, `USPSPriorityFlatRateBox`, `USPSGroundAdvantage`, `USPSParcel`, and `FedExGround`. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
 
 If Settings appears stuck on `Creating...`, the client now times out after 25 seconds and resets the active button. Use `Retry next fulfillment attempt` to call `POST /api/ebay/policies/retry-fulfillment-step`; each request tries one schema/service with an 8 second eBay timeout and returns a visible result. Then open `GET /api/ebay/policies/debug` to inspect stored policy IDs, policy counts, fulfillment missing reason, and the latest safe fulfillment attempt logs. It never returns OAuth tokens.
+
+If every step-based fulfillment attempt times out, use `Run long fulfillment test` in Settings or call `POST /api/ebay/policies/fulfillment-long-test`. The long test tries exactly one minimal `USPSFirstClass` buyer-paid `$5.00` fulfillment policy with a 45 second server timeout, then runs seller policy sync once. If it also times out, the app reports that the eBay sandbox Account API did not respond for fulfillment policy creation. Payment, return, OAuth, and inventory can still be ready, but real sandbox offer publish remains blocked because eBay requires a real fulfillment policy ID.
 
 `GET /api/system/health` returns the same checklist shown on Dashboard → System health: connection, Telegram, AI parser, seller policies, location, product/draft counts, publish-ready drafts, last automation error, last integration warning, and suggested next action.
 
@@ -294,6 +297,7 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 - `20403 User is not eligible for Business Policy`: the sandbox seller is not opted into `SELLING_POLICY_MANAGEMENT`. Click `Enable seller policies`, wait for eBay to activate the program if needed, then click `Sync seller policies` again.
 - No policies found: Business Policies are active, but no payment, return, and fulfillment policies exist yet. Click `Create default seller policies`, or create the policies manually in seller settings, then sync again.
 - Payment/return created but fulfillment missing: eBay sandbox can reject Account API shipping services or return an internal application error even when Business Policies are active. Click `Discover shipping services`, then `Retry next fulfillment attempt` or `Auto-run attempts one by one`.
+- All fulfillment attempts timeout: if `USPSFirstClass`, `USPSPriority`, `UPSGround`, `FedExHomeDelivery`, `USPSPriorityFlatRateBox`, and discovered services all time out, run `Run long fulfillment test`. A timeout there means the sandbox seller's Account API fulfillment policy endpoint is the blocker, not the shipping code. `ALLOW_SANDBOX_POLICY_FALLBACK=true` can be used only for readiness/inventory diagnostics; offer publish is blocked until a real fulfillment policy ID exists.
 - `Creating...` stuck in Settings: the browser action should time out after 25 seconds and show `Request timed out. Check Vercel logs or try again.` Retry with `Retry next fulfillment attempt`, then check `/api/ebay/policies/debug` for bounded attempt details. If eBay times out server-side, the UI should show `eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details.`
 - Invalid shipping service code: sandbox rejected the fulfillment policy shipping service. The app discovers valid EBAY_US services first, then tries official-style free shipping and boolean zero-cost schemas while keeping any payment/return policies already created.
 - Missing inventory location: click `Setup location` in Settings.

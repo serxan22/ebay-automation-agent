@@ -126,7 +126,9 @@ export async function validateListingReadiness({
     if (!account.fulfillment_policy_id && !sandboxPolicyFallbackAllowed) {
       missing.push("fulfillment policy");
     } else if (!account.fulfillment_policy_id && sandboxPolicyFallbackAllowed) {
-      warnings.push("Sandbox policy fallback is enabled. Production remains blocked.");
+      warnings.push(
+        "Sandbox policy fallback is enabled for readiness and inventory diagnostics only. Offer publish is blocked until fulfillment policy exists. Production remains blocked."
+      );
     }
 
     if (!account.inventory_location_key) {

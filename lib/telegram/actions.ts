@@ -163,7 +163,11 @@ export async function executeTelegramIntentAction({
     case "DISCOVER_SHIPPING_SERVICES":
       return discoverShippingServicesFromTelegram({ supabase, userId });
     case "RETRY_FULFILLMENT_STEP":
-      return retryFulfillmentStepFromTelegram({ supabase, userId });
+      return retryFulfillmentStepFromTelegram({
+        supabase,
+        userId,
+        question: getString(intent.parameters.user_question)
+      });
     case "SYNC_EBAY_POLICIES":
       return syncEbayPoliciesFromTelegram({ supabase, userId });
     case "CREATE_DEFAULT_EBAY_POLICIES":
@@ -1108,7 +1112,17 @@ async function discoverShippingServicesFromTelegram({ supabase, userId }: Action
   }
 }
 
-async function retryFulfillmentStepFromTelegram({ supabase, userId }: ActionContext) {
+async function retryFulfillmentStepFromTelegram({
+  supabase,
+  userId,
+  question
+}: ActionContext & {
+  question?: string;
+}) {
+  if (isFulfillmentWhyQuestion(question)) {
+    return explainFulfillmentFailureFromTelegram({ supabase, userId });
+  }
+
   const result = await retryFulfillmentPolicyStep({ supabase, userId, marketplaceId: "EBAY_US" });
   const attempt = result.attempt;
 
@@ -1122,7 +1136,85 @@ async function retryFulfillmentStepFromTelegram({ supabase, userId }: ActionCont
           }`
         : "",
       result.nextAttemptIndex != null ? `Next attempt index: ${result.nextAttemptIndex + 1}.` : "",
-      result.fulfillmentPolicyStored ? "Fulfillment policy is now stored." : ""
+      result.fulfillmentPolicyStored ? "Fulfillment policy is now stored." : "",
+      !result.fulfillmentPolicyStored && attempt?.status === "timeout"
+        ? "If every service keeps timing out, eBay sandbox Account API is likely blocking fulfillment policy creation for this seller. Payment, return, and location can still be ready, but offer publish stays blocked until fulfillment policy exists."
+        : ""
+    ]
+      .filter(Boolean)
+      .join("\n")
+  };
+}
+
+async function explainFulfillmentFailureFromTelegram({ supabase, userId }: ActionContext) {
+  const [account, logs] = await Promise.all([
+    getEbayAccount({ supabase, userId, marketplace: "EBAY_US" }),
+    supabase
+      .from("automation_logs")
+      .select("message,metadata_json,created_at")
+      .eq("user_id", userId)
+      .eq("module", "ebay_policies")
+      .in("message", [
+        "ebay_fulfillment_step_failed",
+        "ebay_fulfillment_long_test_timeout",
+        "ebay_fulfillment_long_test_inconclusive"
+      ])
+      .order("created_at", { ascending: false })
+      .limit(20)
+  ]);
+
+  if (logs.error) {
+    throw new Error(logs.error.message);
+  }
+
+  const timeoutServices = Array.from(
+    new Set(
+      (logs.data ?? [])
+        .map((row) => {
+          const metadata = (row as { metadata_json?: unknown }).metadata_json;
+          if (!metadata || typeof metadata !== "object") {
+            return null;
+          }
+
+          const record = metadata as Record<string, unknown>;
+          const status = record.status;
+          const message = typeof record.message === "string" ? record.message.toLowerCase() : "";
+          const timedOut = status === "timeout" || message.includes("timed out") || row.message.includes("timeout");
+
+          if (!timedOut) {
+            return null;
+          }
+
+          return (
+            (typeof record.serviceCode === "string" && record.serviceCode) ||
+            (typeof record.shippingServiceCode === "string" && record.shippingServiceCode) ||
+            null
+          );
+        })
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+  const paymentReady = Boolean(account?.payment_policy_id);
+  const returnReady = Boolean(account?.return_policy_id);
+  const locationReady = Boolean(account?.inventory_location_key);
+  const fulfillmentReady = Boolean(account?.fulfillment_policy_id);
+
+  return {
+    ok: fulfillmentReady,
+    message: [
+      fulfillmentReady
+        ? "Fulfillment policy is stored now. Sync seller policies if the UI still looks stale."
+        : "Fulfillment policy still is not stored.",
+      timeoutServices.length
+        ? `Recent fulfillment creation attempts timed out for: ${timeoutServices.join(", ")}.`
+        : "Recent logs do not show a successful fulfillment policy creation attempt.",
+      !fulfillmentReady
+        ? "This now looks like an eBay sandbox Account API timeout for this seller, not a shipping service code problem."
+        : "",
+      `Readiness: payment ${paymentReady ? "ready" : "missing"}, return ${returnReady ? "ready" : "missing"}, inventory location ${locationReady ? "ready" : "missing"}.`,
+      !fulfillmentReady
+        ? "Offer publish is blocked until a real fulfillment policy ID exists. You can run Settings -> Run long fulfillment test for a final 45 second proof, or enable ALLOW_SANDBOX_POLICY_FALLBACK only for readiness/inventory diagnostics."
+        : ""
     ]
       .filter(Boolean)
       .join("\n")
@@ -1722,6 +1814,14 @@ function getNumber(value: unknown) {
 
 function getString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isFulfillmentWhyQuestion(question?: string) {
+  if (!question) {
+    return false;
+  }
+
+  return /niy[əe]|why|al[ıi]nm[ıi]r|problem|timeout|timed out/i.test(question);
 }
 
 function groupRejectionReason(reason: string) {
