@@ -20,6 +20,8 @@ export interface ListingReadinessResult {
   score: number;
   missing: string[];
   warnings: string[];
+  canPublishSandbox: boolean;
+  canPublishProduction: false;
 }
 
 export async function validateListingReadiness({
@@ -37,6 +39,8 @@ export async function validateListingReadiness({
   const quantity = Number(draft.quantity ?? 0);
   const imageUrls = Array.isArray(draft.optimized_image_urls) ? draft.optimized_image_urls.filter(Boolean) : [];
   const fallbackCategoryId = process.env.EBAY_SANDBOX_FALLBACK_CATEGORY_ID?.trim();
+  const sandboxPolicyFallbackAllowed =
+    process.env.EBAY_ENVIRONMENT !== "production" && process.env.ALLOW_SANDBOX_POLICY_FALLBACK === "true";
   const skuSource = draft.supplier_sku?.trim() || draft.id?.trim() || "";
   const normalizedSku = skuSource.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 50);
 
@@ -119,8 +123,10 @@ export async function validateListingReadiness({
       missing.push("return policy");
     }
 
-    if (!account.fulfillment_policy_id) {
+    if (!account.fulfillment_policy_id && !sandboxPolicyFallbackAllowed) {
       missing.push("fulfillment policy");
+    } else if (!account.fulfillment_policy_id && sandboxPolicyFallbackAllowed) {
+      warnings.push("Sandbox policy fallback is enabled. Production remains blocked.");
     }
 
     if (!account.inventory_location_key) {
@@ -135,12 +141,15 @@ export async function validateListingReadiness({
   const uniqueMissing = Array.from(new Set(missing));
   const uniqueWarnings = Array.from(new Set(warnings));
   const score = Math.max(0, Math.min(100, 100 - uniqueMissing.length * 12 - uniqueWarnings.length * 4));
+  const canPublishSandbox = uniqueMissing.length === 0;
 
   return {
-    ready: uniqueMissing.length === 0,
+    ready: canPublishSandbox,
     score,
     missing: uniqueMissing,
-    warnings: uniqueWarnings
+    warnings: uniqueWarnings,
+    canPublishSandbox,
+    canPublishProduction: false
   };
 }
 

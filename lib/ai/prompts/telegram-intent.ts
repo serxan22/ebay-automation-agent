@@ -8,7 +8,7 @@ Return only one valid JSON object. Do not use markdown, explanations, or code fe
 
 Allowed JSON shape:
 {
-  "intent": "RESUME_AUTOMATION" | "PAUSE_AUTOMATION" | "SHOW_STATUS" | "SHOW_DAILY_REPORT" | "CHANGE_DAILY_LIMIT" | "CHANGE_MIN_MARGIN" | "CHANGE_MIN_PROFIT" | "CHANGE_RISK_TOLERANCE" | "ENABLE_TEST_MODE" | "FIND_PRODUCTS" | "ANALYZE_PRODUCTS" | "CREATE_LISTING_DRAFTS" | "SHOW_LISTING_DRAFTS" | "APPROVE_DRAFTS" | "REVISE_DRAFT_HELP" | "SHOW_EBAY_READINESS" | "SYNC_EBAY_POLICIES" | "SETUP_EBAY_LOCATION" | "PUBLISH_SAFE_DRAFTS_SANDBOX" | "SHOW_FAILED_TASKS" | "UPDATE_BLOCKED_CATEGORY" | "UPDATE_BLOCKED_BRAND" | "CHANGE_APPROVAL_MODE" | "EXPLAIN_SYSTEM" | "ASK_CLARIFICATION" | "UNKNOWN",
+  "intent": "SHOW_SYSTEM_HEALTH" | "RESUME_AUTOMATION" | "PAUSE_AUTOMATION" | "SHOW_STATUS" | "SHOW_DAILY_REPORT" | "CHANGE_DAILY_LIMIT" | "CHANGE_MIN_MARGIN" | "CHANGE_MIN_PROFIT" | "CHANGE_RISK_TOLERANCE" | "ENABLE_TEST_MODE" | "FIND_PRODUCTS" | "ANALYZE_PRODUCTS" | "CREATE_LISTING_DRAFTS" | "SHOW_LISTING_DRAFTS" | "APPROVE_DRAFTS" | "REVISE_DRAFT_HELP" | "SHOW_EBAY_READINESS" | "DISCOVER_SHIPPING_SERVICES" | "RETRY_FULFILLMENT_STEP" | "SYNC_EBAY_POLICIES" | "CREATE_DEFAULT_EBAY_POLICIES" | "SETUP_EBAY_LOCATION" | "IMPROVE_LISTING_COPY" | "OPTIMIZE_IMAGES" | "SHOW_READY_DRAFTS" | "PUBLISH_READY_DRAFTS_SANDBOX" | "PUBLISH_SAFE_DRAFTS_SANDBOX" | "SHOW_FAILED_TASKS" | "UPDATE_BLOCKED_CATEGORY" | "UPDATE_BLOCKED_BRAND" | "CHANGE_APPROVAL_MODE" | "EXPLAIN_SYSTEM" | "ASK_CLARIFICATION" | "UNKNOWN",
   "confidence": number,
   "language": "az" | "tr" | "en" | "mixed",
   "parameters": {
@@ -35,7 +35,7 @@ Allowed JSON shape:
 Classification rules:
 - Pause/stop/turn off automation => PAUSE_AUTOMATION.
 - Resume/enable/start/activate automation, "botu işə sal", "automationu aktiv et" => RESUME_AUTOMATION.
-- Status, "sistem işləyir?", "nə problem var sistemdə?" when asking current state => SHOW_STATUS or EXPLAIN_SYSTEM.
+- Status, "sistem işləyir?", "sistem statusu", "nə problem var?", "publish üçün nə çatmır?" when asking current state => SHOW_SYSTEM_HEALTH or SHOW_EBAY_READINESS.
 - Daily reports, "bu gün nə etdin?", "report ver" => SHOW_DAILY_REPORT.
 - Rejected/failed/list olunmayan/niyə reject oldu => SHOW_FAILED_TASKS.
 - "daily limit", "gündəlik limit", "sabahdan gündəlik limit 15 olsun" => CHANGE_DAILY_LIMIT with quantity and timeframe.
@@ -53,8 +53,12 @@ Classification rules:
 - "safe draftları approve et", "approve draftlarımı", "approve safe drafts" => APPROVE_DRAFTS. This approves draft rows only; it does not publish to eBay.
 - "draftı necə revise edim?", "revise draft help", "draft edit kömək" => REVISE_DRAFT_HELP.
 - "ebay status", "sandbox connection status", "draftlar publish üçün hazırdır?" => SHOW_EBAY_READINESS.
+- "shipping services discover et", "fulfillment niyə alınmır?", "retry fulfillment" => DISCOVER_SHIPPING_SERVICES or RETRY_FULFILLMENT_STEP.
 - "seller policies sync et", "business policies yenilə" => SYNC_EBAY_POLICIES.
 - "inventory location qur", "warehouse location setup et" => SETUP_EBAY_LOCATION.
+- "descriptionu daha cəlbedici et", "title SEO üçün düzəlt", "draftı premium et" => IMPROVE_LISTING_COPY.
+- "şəkilləri hazırla", "image optimize et" => OPTIMIZE_IMAGES.
+- "ready draftları göstər", "publish üçün nə hazırdır?" => SHOW_READY_DRAFTS.
 - Publish/list safe drafts to eBay => PUBLISH_SAFE_DRAFTS_SANDBOX with publish_mode "sandbox_only".
 - Block a category, e.g. "electronics kateqoriyasını blokla" => UPDATE_BLOCKED_CATEGORY.
 - Block a brand => UPDATE_BLOCKED_BRAND.

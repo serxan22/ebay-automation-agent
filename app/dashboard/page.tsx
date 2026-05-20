@@ -2,10 +2,17 @@ import { AlertTriangle, Bot, CircleDollarSign, ClipboardList, ListChecks, Store,
 import { AutomationLogTimeline } from "@/components/dashboard/AutomationLogTimeline";
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
+import { SystemHealthCard } from "@/components/dashboard/SystemHealthCard";
 import { demoAnalyses, demoLogs, demoProducts, demoSuppliers } from "@/lib/demo-data";
+import { getSystemHealth } from "@/lib/system/health-check";
+import { requireUser } from "@/lib/supabase/auth";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { formatCurrency } from "@/lib/utils/format";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const user = await requireUser();
+  const supabase = createSupabaseServerClient();
+  const health = await getSystemHealth({ supabase, user });
   const activeSuppliers = demoSuppliers.filter((supplier) => supplier.status === "active").length;
   const approved = demoAnalyses.filter((analysis) => analysis.approvedForListing);
   const rejected = demoAnalyses.length - approved.length;
@@ -13,6 +20,8 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      <SystemHealthCard health={health} />
+
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <DashboardCard title="Listed today" value="0 / 5" detail="Manual approval mode is active." icon={<ListChecks size={18} />} tone="warning" />
         <DashboardCard title="Active listings" value="0" detail="eBay sandbox publish starts in Phase 2." icon={<ClipboardList size={18} />} />

@@ -1,17 +1,20 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
-import { getEbayAccount } from "@/lib/ebay/account";
+import { getEbayAccount, getValidEbayAccessToken } from "@/lib/ebay/account";
 import { ensureInventoryLocation } from "@/lib/ebay/locations";
-import { createDefaultSellerPolicies, syncSellerPolicies } from "@/lib/ebay/policies";
+import { createDefaultSellerPolicies, retryFulfillmentPolicyStep, syncSellerPolicies } from "@/lib/ebay/policies";
 import { publishListingDraftToEbaySandbox } from "@/lib/ebay/publish";
+import { discoverShippingServicesWithFallback, getPreferredDomesticShippingServices } from "@/lib/ebay/shipping-services";
 import { getConfiguredAiProvider } from "@/lib/ai";
 import { generateListing } from "@/lib/ai/generate-listing";
+import { optimizeProductImages } from "@/lib/images/optimize-product-images";
 import { validateListingReadiness } from "@/lib/listings/validate-listing-readiness";
 import { analyzeProduct } from "@/lib/products/analyze-product";
 import {
   createListingDraft,
   createSafeFallbackListingGeneration
 } from "@/lib/products/create-listing-draft";
+import { getSystemHealth } from "@/lib/system/health-check";
 import type { TelegramIntent } from "@/lib/telegram/intent-parser";
 import type {
   AgentTaskResult,
@@ -107,6 +110,8 @@ export async function executeTelegramIntentAction({
   }
 
   switch (intent.intent) {
+    case "SHOW_SYSTEM_HEALTH":
+      return showSystemHealth({ supabase, userId });
     case "SHOW_STATUS":
       return showStatus({ supabase, userId });
     case "SHOW_DAILY_REPORT":
@@ -134,7 +139,9 @@ export async function executeTelegramIntentAction({
         supabase,
         userId,
         quantity: getNumber(intent.parameters.quantity) ?? 5,
-        source: intent.parameters.draft_source ?? "latest_products"
+        source: intent.parameters.draft_source ?? "latest_products",
+        minMarginPercentage: getNumber(intent.parameters.min_margin_percentage),
+        minProfitAmount: getNumber(intent.parameters.min_profit_amount)
       });
     case "SHOW_LISTING_DRAFTS":
       return showListingDrafts({
@@ -153,12 +160,24 @@ export async function executeTelegramIntentAction({
       return reviseDraftHelp();
     case "SHOW_EBAY_READINESS":
       return showEbayReadiness({ supabase, userId });
+    case "DISCOVER_SHIPPING_SERVICES":
+      return discoverShippingServicesFromTelegram({ supabase, userId });
+    case "RETRY_FULFILLMENT_STEP":
+      return retryFulfillmentStepFromTelegram({ supabase, userId });
     case "SYNC_EBAY_POLICIES":
       return syncEbayPoliciesFromTelegram({ supabase, userId });
     case "CREATE_DEFAULT_EBAY_POLICIES":
       return createDefaultEbayPoliciesFromTelegram({ supabase, userId });
     case "SETUP_EBAY_LOCATION":
       return setupEbayLocationFromTelegram({ supabase, userId });
+    case "IMPROVE_LISTING_COPY":
+      return improveListingCopyFromTelegram({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 3 });
+    case "OPTIMIZE_IMAGES":
+      return optimizeImagesFromTelegram({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 5 });
+    case "SHOW_READY_DRAFTS":
+      return showReadyDrafts({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 5 });
+    case "PUBLISH_READY_DRAFTS_SANDBOX":
+      return publishSafeDraftsSandbox({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 5 });
     case "PUBLISH_SAFE_DRAFTS_SANDBOX":
       return publishSafeDraftsSandbox({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 5 });
     case "SHOW_FAILED_TASKS":
@@ -233,6 +252,29 @@ async function showStatus({ supabase, userId }: ActionContext) {
     ok: true,
     message: `Status: auto_listing_enabled ${settings.autoListingEnabled ? "true (aktivdir)" : "false (dayandırılıb)"}, daily_listing_limit ${settings.dailyListingLimit}, min_profit_amount $${settings.minProfitAmount}, min_margin_percentage ${settings.minMarginPercentage}%, risk_tolerance ${settings.riskTolerance}, max_shipping_days ${settings.maxShippingDays}, approval_mode ${settings.approvalMode}. Suppliers ${suppliers.count ?? 0}, products ${products.count ?? 0}, active drafts ${activeDrafts}, failed tasks today ${failedTasks}. eBay ${ebay.data?.status ?? "not connected"} (${ebay.data?.marketplace ?? "sandbox"}).`
       + ` Policies ${policiesReady ? "ready" : "missing"}, inventory location ${locationReady ? "ready" : "missing"}.`
+  };
+}
+
+async function showSystemHealth({ supabase, userId }: ActionContext) {
+  const health = await getSystemHealth({
+    supabase,
+    user: { id: userId }
+  });
+  const missing = health.checks.filter((check) => check.status !== "ready").slice(0, 6);
+
+  return {
+    ok: health.status !== "missing",
+    message: [
+      `System status: ${health.ready ? "Ready" : health.status === "attention" ? "Needs attention" : "Missing requirement"}.`,
+      `Products ${health.counts.supplierProducts}, analyzed ${health.counts.analyzedProducts}, approved products ${health.counts.approvedProducts}, drafts ${health.counts.listingDrafts}, ready drafts ${health.counts.publishReadyDrafts}.`,
+      missing.length
+        ? `Needs action:\n${missing.map((check) => `- ${check.message}${check.nextAction ? ` Next: ${check.nextAction}` : ""}`).join("\n")}`
+        : "No blocking checklist item found for sandbox automation.",
+      health.lastEbayError ? `Last integration warning: ${health.lastEbayError}` : "",
+      health.lastAutomationError ? `Last automation error: ${health.lastAutomationError}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n")
   };
 }
 
@@ -463,12 +505,21 @@ async function createListingDrafts({
   supabase,
   userId,
   quantity,
-  source
+  source,
+  minMarginPercentage,
+  minProfitAmount
 }: ActionContext & {
   quantity: number;
   source: "latest_products" | "approved_products";
+  minMarginPercentage?: number;
+  minProfitAmount?: number;
 }) {
-  const settings = await getAutomationSettings(supabase, userId);
+  const savedSettings = await getAutomationSettings(supabase, userId);
+  const settings = {
+    ...savedSettings,
+    minMarginPercentage: minMarginPercentage ?? savedSettings.minMarginPercentage,
+    minProfitAmount: minProfitAmount ?? savedSettings.minProfitAmount
+  };
   const startedAt = new Date().toISOString();
   let draftsCreated = 0;
   let rejected = 0;
@@ -716,6 +767,7 @@ async function createDraftFromCandidate({
       analysisId: candidate.analysisId
     });
     const fallbackUsed = generated.warnings.includes("Safe fallback listing content was used.");
+    const draftStatus = settings.approvalMode === "trusted_auto" && candidate.analysis.finalScore >= 70 ? "approved" : draft.status;
     const { data, error } = await supabase
       .from("listing_drafts")
       .insert({
@@ -730,7 +782,7 @@ async function createDraftFromCandidate({
         quantity: fallbackUsed ? Math.max(1, Math.min(candidate.product.stockQuantity || 1, 1)) : draft.quantity,
         price: draft.price,
         optimized_image_urls: draft.optimizedImageUrls,
-        status: "draft",
+        status: draftStatus,
         ai_generated: draft.aiGenerated
       })
       .select("id")
@@ -1031,6 +1083,52 @@ async function showEbayReadiness({ supabase, userId }: ActionContext) {
   };
 }
 
+async function discoverShippingServicesFromTelegram({ supabase, userId }: ActionContext) {
+  try {
+    const { accessToken } = await getValidEbayAccessToken({ supabase, userId, marketplace: "EBAY_US" });
+    const discovery = await discoverShippingServicesWithFallback(accessToken);
+    const services = getPreferredDomesticShippingServices(discovery.services).slice(0, 8);
+
+    return {
+      ok: true,
+      message: [
+        discovery.discovered
+          ? `Discovered ${discovery.services.length} sandbox shipping services.`
+          : `Shipping discovery used fallback services: ${discovery.discoveryError ?? "discovery failed"}.`,
+        services.length
+          ? `Top services:\n${services.map((service) => `- ${service.shippingService}${service.description ? `: ${service.description}` : ""}`).join("\n")}`
+          : "No domestic selling services found."
+      ].join("\n")
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Shipping service discovery failed."
+    };
+  }
+}
+
+async function retryFulfillmentStepFromTelegram({ supabase, userId }: ActionContext) {
+  const result = await retryFulfillmentPolicyStep({ supabase, userId, marketplaceId: "EBAY_US" });
+  const attempt = result.attempt;
+
+  return {
+    ok: result.ok,
+    message: [
+      result.message,
+      attempt
+        ? `Attempt ${attempt.attemptNumber}: ${attempt.serviceCode} / ${attempt.schemaVariant} / ${attempt.status}. ${
+            attempt.message ?? ""
+          }`
+        : "",
+      result.nextAttemptIndex != null ? `Next attempt index: ${result.nextAttemptIndex + 1}.` : "",
+      result.fulfillmentPolicyStored ? "Fulfillment policy is now stored." : ""
+    ]
+      .filter(Boolean)
+      .join("\n")
+  };
+}
+
 async function syncEbayPoliciesFromTelegram({ supabase, userId }: ActionContext) {
   try {
     const result = await syncSellerPolicies({ supabase, userId });
@@ -1132,6 +1230,161 @@ async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionCo
   return {
     ok: failed === 0,
     message: `Sandbox publish finished: ${published} published, ${failed} failed. Production eBay publishing remains disabled.`
+  };
+}
+
+async function showReadyDrafts({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
+  const account = await getEbayAccount({ supabase, userId });
+  const { data, error } = await supabase
+    .from("listing_drafts")
+    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,supplier_products(supplier_sku)")
+    .eq("user_id", userId)
+    .in("status", ["approved", "draft", "failed"])
+    .order("updated_at", { ascending: false })
+    .limit(Math.min(Math.max(quantity * 3, 5), 50));
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const rows = (data ?? []) as Array<Record<string, any>>;
+  const readiness = await Promise.all(
+    rows.map((draft) =>
+      validateListingReadiness({
+        draft: {
+          ...draft,
+          supplier_sku: getEmbeddedRow(draft.supplier_products)?.supplier_sku ?? null
+        },
+        account
+      })
+    )
+  );
+  const ready = rows.filter((_, index) => readiness[index]?.canPublishSandbox).slice(0, quantity);
+  const firstMissing = readiness.find((result) => !result.canPublishSandbox)?.missing.slice(0, 5) ?? [];
+
+  return {
+    ok: true,
+    message: ready.length
+      ? `Publish-ready drafts:\n${ready.map((draft, index) => `${index + 1}. ${draft.ebay_title}`).join("\n")}`
+      : `No publish-ready drafts yet.${firstMissing.length ? ` Missing first: ${firstMissing.join(", ")}.` : ""}`
+  };
+}
+
+async function improveListingCopyFromTelegram({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
+  const limit = Math.min(Math.max(quantity, 1), 5);
+  const { data, error } = await supabase
+    .from("listing_drafts")
+    .select("id,status,supplier_products(*),product_analysis(*)")
+    .eq("user_id", userId)
+    .neq("status", "published")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  let updated = 0;
+  let skipped = 0;
+
+  for (const row of (data ?? []) as Array<Record<string, any>>) {
+    const productRow = getEmbeddedRow(row.supplier_products);
+    const analysisRow = getEmbeddedRow(row.product_analysis);
+
+    if (!productRow || !analysisRow) {
+      skipped += 1;
+      continue;
+    }
+
+    const product = mapSupplierProduct(productRow);
+    const analysis = mapProductAnalysis(analysisRow);
+    const generated = await generateListingForDraft(product, analysis);
+    const { error: updateError } = await supabase
+      .from("listing_drafts")
+      .update({
+        ebay_title: generated.ebayTitle,
+        ebay_description: generated.ebayDescription,
+        item_specifics: generated.itemSpecifics,
+        ai_generated: true,
+        error_message: null,
+        ebay_error_code: null,
+        ebay_error_json: {}
+      })
+      .eq("user_id", userId)
+      .eq("id", row.id);
+
+    if (updateError) {
+      skipped += 1;
+    } else {
+      updated += 1;
+    }
+  }
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: updated > 0 ? "success" : "warning",
+    module: "listing_drafts",
+    message: "listing_copy_improved_from_telegram",
+    metadata: { updated, skipped }
+  });
+
+  return {
+    ok: updated > 0,
+    message: `${updated} draft listing copy updated. ${skipped} skipped. No publish action was run.`
+  };
+}
+
+async function optimizeImagesFromTelegram({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
+  const limit = Math.min(Math.max(quantity, 1), 5);
+  const { data, error } = await supabase
+    .from("listing_drafts")
+    .select("id,supplier_product_id,optimized_image_urls,supplier_products(image_urls)")
+    .eq("user_id", userId)
+    .neq("status", "published")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  let updated = 0;
+  let rejected = 0;
+
+  for (const row of (data ?? []) as Array<Record<string, any>>) {
+    const product = getEmbeddedRow(row.supplier_products);
+    const sourceUrls = Array.isArray(row.optimized_image_urls) && row.optimized_image_urls.length
+      ? row.optimized_image_urls
+      : Array.isArray(product?.image_urls)
+        ? product.image_urls
+        : [];
+    const result = await optimizeProductImages({
+      imageUrls: sourceUrls,
+      userId,
+      supplierProductId: row.supplier_product_id as string,
+      store: false,
+      maxImages: 8
+    });
+
+    rejected += result.rejected.length;
+
+    if (result.optimizedUrls.length) {
+      const { error: updateError } = await supabase
+        .from("listing_drafts")
+        .update({ optimized_image_urls: result.optimizedUrls })
+        .eq("user_id", userId)
+        .eq("id", row.id);
+
+      if (!updateError) {
+        updated += 1;
+      }
+    }
+  }
+
+  return {
+    ok: updated > 0,
+    message: `${updated} drafts now have validated image URLs. ${rejected} image URLs rejected. Storage upload is left off unless configured later.`
   };
 }
 
@@ -1320,14 +1573,14 @@ async function getAutomationSettings(supabase: SupabaseClient, userId: string): 
 
   return {
     userId,
-    dailyListingLimit: Number(row.daily_listing_limit ?? 5),
-    minProfitAmount: Number(row.min_profit_amount ?? 5),
-    minMarginPercentage: Number(row.min_margin_percentage ?? 25),
-    maxShippingDays: Number(row.max_shipping_days ?? 5),
+    dailyListingLimit: Number(row.daily_listing_limit ?? 10),
+    minProfitAmount: Number(row.min_profit_amount ?? 2),
+    minMarginPercentage: Number(row.min_margin_percentage ?? 20),
+    maxShippingDays: Number(row.max_shipping_days ?? 10),
     minStockQuantity: Number(row.min_stock_quantity ?? 5),
     autoListingEnabled: Boolean(row.auto_listing_enabled),
     approvalMode: row.approval_mode ?? "manual",
-    riskTolerance: Number(row.risk_tolerance ?? 80),
+    riskTolerance: Number(row.risk_tolerance ?? 40),
     defaultQuantity: Number(row.default_quantity ?? 1),
     pricingBufferPercentage: Number(row.pricing_buffer_percentage ?? 5),
     promotedListingPercentage: Number(row.promoted_listing_percentage ?? 0),
@@ -1357,7 +1610,18 @@ async function getSettingsRow(supabase: SupabaseClient, userId: string) {
 }
 
 async function ensureSettingsRow(supabase: SupabaseClient, userId: string) {
-  const { error } = await supabase.from("automation_settings").upsert({ user_id: userId }, { onConflict: "user_id" });
+  const { error } = await supabase.from("automation_settings").upsert(
+    {
+      user_id: userId,
+      daily_listing_limit: 10,
+      min_margin_percentage: 20,
+      min_profit_amount: 2,
+      risk_tolerance: 40,
+      max_shipping_days: 10,
+      approval_mode: "manual"
+    },
+    { onConflict: "user_id", ignoreDuplicates: true }
+  );
 
   if (error) {
     throw new Error(error.message);
@@ -1520,6 +1784,14 @@ function describeSupabaseError(error: { message?: string; code?: string }) {
   }
 
   return message;
+}
+
+function getEmbeddedRow(value: unknown): Record<string, any> | null {
+  if (Array.isArray(value)) {
+    return (value[0] as Record<string, any> | undefined) ?? null;
+  }
+
+  return (value as Record<string, any> | null) ?? null;
 }
 
 function startOfTodayIso() {

@@ -53,6 +53,7 @@ Required for eBay sandbox:
 - `EBAY_ENVIRONMENT=sandbox`
 - `EBAY_MARKETPLACE_ID=EBAY_US`
 - `EBAY_SANDBOX_FALLBACK_CATEGORY_ID` optional sandbox-only fallback category
+- `ALLOW_SANDBOX_POLICY_FALLBACK=false` by default; set `true` only for sandbox diagnostics when fulfillment policy creation is broken
 
 Use `EBAY_RUNAME` for the eBay Developer portal Redirect URL name/RuName. Keep `EBAY_REDIRECT_URI` as the real application callback URL, for example `https://your-ngrok-url/market/callback`.
 
@@ -250,8 +251,10 @@ GET /api/ebay/programs
 POST /api/ebay/programs/opt-in-selling-policies
 POST /api/ebay/policies/create-defaults
 POST /api/ebay/policies/retry-fulfillment
+POST /api/ebay/policies/retry-fulfillment-step
 GET /api/ebay/policies/debug
 GET /api/ebay/shipping-services
+GET /api/system/health
 ```
 
 `GET /api/ebay/programs` calls `get_opted_in_programs` and reports whether `SELLING_POLICY_MANAGEMENT` is active. `POST /api/ebay/programs/opt-in-selling-policies` calls `program/opt_in` with `{ "programType": "SELLING_POLICY_MANAGEMENT" }`. eBay can take time to activate program opt-in, so wait and check again before retrying policy sync.
@@ -262,7 +265,9 @@ The sandbox seller UI may not expose Business Policies reliably, so the app does
 
 Default fulfillment policy creation tries discovered EBAY_US services first and is capped at eight attempts so it returns a visible result instead of hanging. Fulfillment POST calls allow up to 20 seconds, and each attempt is recorded before the eBay request so timeout responses still show service code, schema variant, status, and message. The first `USPSFirstClass` attempts use minimal free-shipping and buyer-paid `$5` schemas; later attempts use official-style free shipping, boolean zero-cost shipping, and fallback services. Preferred service codes include `USPSFirstClass`, `USPSPriority`, `UPSGround`, `FedExHomeDelivery`, `USPSPriorityFlatRateBox`, `USPSGroundAdvantage`, `USPSParcel`, and `FedExGround`. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
 
-If Settings appears stuck on `Creating...`, the client now times out after 25 seconds and resets the active button. Use `Retry fulfillment policy` to call only `POST /api/ebay/policies/retry-fulfillment`, then open `GET /api/ebay/policies/debug` to inspect stored policy IDs, policy counts, fulfillment missing reason, and the latest safe fulfillment attempt logs. It never returns OAuth tokens.
+If Settings appears stuck on `Creating...`, the client now times out after 25 seconds and resets the active button. Use `Retry next fulfillment attempt` to call `POST /api/ebay/policies/retry-fulfillment-step`; each request tries one schema/service with an 8 second eBay timeout and returns a visible result. Then open `GET /api/ebay/policies/debug` to inspect stored policy IDs, policy counts, fulfillment missing reason, and the latest safe fulfillment attempt logs. It never returns OAuth tokens.
+
+`GET /api/system/health` returns the same checklist shown on Dashboard → System health: connection, Telegram, AI parser, seller policies, location, product/draft counts, publish-ready drafts, last automation error, last integration warning, and suggested next action.
 
 The OAuth callback issue was fixed by using the neutral public app domain and clean callback route:
 
@@ -288,8 +293,8 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 - Callback not saving tokens: run `sql/phase4_ebay_oauth_states.sql` and confirm `SUPABASE_SERVICE_ROLE_KEY` and `ENCRYPTION_SECRET` exist in Vercel.
 - `20403 User is not eligible for Business Policy`: the sandbox seller is not opted into `SELLING_POLICY_MANAGEMENT`. Click `Enable seller policies`, wait for eBay to activate the program if needed, then click `Sync seller policies` again.
 - No policies found: Business Policies are active, but no payment, return, and fulfillment policies exist yet. Click `Create default seller policies`, or create the policies manually in seller settings, then sync again.
-- Payment/return created but fulfillment missing: eBay sandbox can reject Account API shipping services or return an internal application error even when Business Policies are active. Click `Discover shipping services`, then `Retry fulfillment policy`.
-- `Creating...` stuck in Settings: the browser action should time out after 25 seconds and show `Request timed out. Check Vercel logs or try again.` Retry with `Retry fulfillment policy`, then check `/api/ebay/policies/debug` for bounded attempt details. If eBay times out server-side, the UI should show `eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details.`
+- Payment/return created but fulfillment missing: eBay sandbox can reject Account API shipping services or return an internal application error even when Business Policies are active. Click `Discover shipping services`, then `Retry next fulfillment attempt` or `Auto-run attempts one by one`.
+- `Creating...` stuck in Settings: the browser action should time out after 25 seconds and show `Request timed out. Check Vercel logs or try again.` Retry with `Retry next fulfillment attempt`, then check `/api/ebay/policies/debug` for bounded attempt details. If eBay times out server-side, the UI should show `eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details.`
 - Invalid shipping service code: sandbox rejected the fulfillment policy shipping service. The app discovers valid EBAY_US services first, then tries official-style free shipping and boolean zero-cost schemas while keeping any payment/return policies already created.
 - Missing inventory location: click `Setup location` in Settings.
 - Invalid category/aspects: revise the draft category ID and item specifics JSON.
@@ -304,12 +309,29 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 5. In Supabase, verify `public.ebay_accounts` has one connected row for the user.
 6. Confirm `Business policies` is `Active`, or click `Enable seller policies` and wait if eBay needs time to activate `SELLING_POLICY_MANAGEMENT`.
 7. Click `Sync seller policies`.
-8. If no policy IDs are found, click `Create default seller policies`. If only fulfillment is missing, click `Discover shipping services`, then `Retry fulfillment policy`.
+8. If no policy IDs are found, click `Create default seller policies`. If only fulfillment is missing, click `Discover shipping services`, then `Retry next fulfillment attempt` or `Auto-run attempts one by one`.
 9. Click `Setup location`.
 10. Create or revise a listing draft until readiness is green, then approve it.
 11. Click `Publish sandbox`.
 
-Manual sandbox setup is a last resort only if shipping-service discovery also fails and eBay still rejects all Account API fulfillment policy attempts. The normal path is Settings → `Discover shipping services` → `Retry fulfillment policy` → `Setup location`, Listings → approve draft, Listings → `Publish sandbox`.
+Manual sandbox setup is a last resort only if shipping-service discovery also fails and eBay still rejects all Account API fulfillment policy attempts. The normal path is Settings → `Discover shipping services` → `Retry next fulfillment attempt` → `Setup location`, Listings → approve draft, Listings → `Publish sandbox`.
+
+### Operating Runbook
+
+1. Deploy Vercel with the environment variables above.
+2. Run Supabase migrations from `sql/schema.sql`, `sql/phase2_ebay_sandbox.sql`, `sql/phase3_telegram_bot.sql`, `sql/phase4_ebay_oauth_states.sql`, and `sql/phase5_safe_defaults.sql`.
+3. Open `/dashboard` and review System health.
+4. Open `/dashboard/settings`, connect sandbox, and confirm refresh token is stored.
+5. Enable seller policies if Business Policies are inactive.
+6. Click `Sync seller policies`.
+7. If payment/return/fulfillment policies do not exist, click `Create default seller policies`.
+8. If fulfillment is still missing, click `Discover shipping services`, then `Retry next fulfillment attempt`; use `Auto-run attempts one by one` only when you want the UI to walk the bounded attempts.
+9. Click `Setup location`.
+10. Import supplier products from `/dashboard/suppliers`.
+11. Use Telegram or `/dashboard/products` to analyze products.
+12. Create listing drafts, improve listing copy/images, and approve safe drafts.
+13. Publish sandbox only from `/dashboard/listings` or Telegram.
+14. Use `/api/system/health`, `/api/ebay/policies/debug`, `/api/ebay/shipping-services`, and `/api/ebay/status` for diagnostics.
 
 ## Telegram Bot
 
@@ -386,6 +408,7 @@ The `/dashboard/telegram` page shows `AI active` when Groq, OpenAI, or Anthropic
 
 ### Supported Natural-Language Intents
 
+- `SHOW_SYSTEM_HEALTH`
 - `SHOW_STATUS`
 - `SHOW_DAILY_REPORT`
 - `PAUSE_AUTOMATION`
@@ -398,6 +421,15 @@ The `/dashboard/telegram` page shows `AI active` when Groq, OpenAI, or Anthropic
 - `FIND_PRODUCTS`
 - `ANALYZE_PRODUCTS`
 - `CREATE_LISTING_DRAFTS`
+- `SHOW_READY_DRAFTS`
+- `IMPROVE_LISTING_COPY`
+- `OPTIMIZE_IMAGES`
+- `DISCOVER_SHIPPING_SERVICES`
+- `RETRY_FULFILLMENT_STEP`
+- `SYNC_EBAY_POLICIES`
+- `CREATE_DEFAULT_EBAY_POLICIES`
+- `SETUP_EBAY_LOCATION`
+- `PUBLISH_READY_DRAFTS_SANDBOX`
 - `PUBLISH_SAFE_DRAFTS_SANDBOX`
 - `SHOW_FAILED_TASKS`
 - `UPDATE_BLOCKED_CATEGORY`
@@ -418,6 +450,13 @@ Example messages:
 - `mənə bu gün nə etdiyini report ver`
 - `list olunmayan məhsullar niyə reject oldu?`
 - `safe olan 5 draftı sandbox ebaydə publish elə`
+- `10 dənə məhsul tap bu supplierdan və 20 faiz profitlə listing hazırla`
+- `sistem statusu`
+- `publish üçün nə çatmır?`
+- `fulfillment niyə alınmır?`
+- `shipping services discover et`
+- `descriptionu daha cəlbedici et`
+- `şəkilləri hazırla`
 - `electronics kateqoriyasını blokla`
 - `sabahdan gündəlik limit 15 olsun`
 - `indi sistemi dayandır, mən sonra davam etdirəcəm`
@@ -435,7 +474,7 @@ Every connected Telegram request is saved to `agent_tasks` with the parsed inten
 
 New seller safe mode defaults:
 
-- Daily listing limit: 5
+- Daily listing limit 10, minimum margin 20%, minimum profit $2, risk tolerance 40, max shipping 10 days
 - Manual approval
 - High risk threshold
 - Restricted categories blocked

@@ -154,6 +154,8 @@ export interface ListingDraft {
     score: number;
     missing: string[];
     warnings: string[];
+    canPublishSandbox?: boolean;
+    canPublishProduction?: false;
   };
 }
 

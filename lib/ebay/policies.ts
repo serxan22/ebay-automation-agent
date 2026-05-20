@@ -38,6 +38,16 @@ export interface FulfillmentRetryResult {
   };
 }
 
+export interface FulfillmentPolicyStepResult {
+  ok: boolean;
+  completed: boolean;
+  nextAttemptIndex: number | null;
+  attempt: FulfillmentPolicyAttemptResult | null;
+  fulfillmentPolicyStored: boolean;
+  message: string;
+  attempts: FulfillmentPolicyAttemptResult[];
+}
+
 interface DefaultPoliciesCreated {
   paymentPolicy: SellerPolicy | null;
   returnPolicy: SellerPolicy | null;
@@ -75,6 +85,7 @@ const defaultPolicyNames = {
 };
 const FULFILLMENT_POLICY_POST_TIMEOUT_MS = 20_000;
 const FULFILLMENT_POLICY_ROUTE_BUDGET_MS = 24_000;
+const FULFILLMENT_POLICY_STEP_TIMEOUT_MS = 8_000;
 interface FulfillmentPolicyAttempt {
   attemptNumber: number;
   schema:
@@ -91,13 +102,14 @@ interface FulfillmentPolicyAttempt {
   shippingCostValue?: string;
   additionalShippingCostValue?: string;
 }
-interface FulfillmentPolicyAttemptResult {
+export interface FulfillmentPolicyAttemptResult {
   attemptNumber: number;
+  attemptIndex?: number;
   serviceCode: string;
   shippingServiceCode: string;
   schemaVariant: FulfillmentPolicyAttempt["schema"];
   schema: FulfillmentPolicyAttempt["schema"];
-  status: "started" | "failed" | "timeout" | "skipped";
+  status: "started" | "success" | "failed" | "timeout" | "skipped";
   timeoutMs: number;
   message?: string;
   shippingCostIncluded: boolean;
@@ -632,6 +644,185 @@ export async function retryFulfillmentPolicy({
   return result;
 }
 
+export async function retryFulfillmentPolicyStep({
+  supabase,
+  userId,
+  marketplaceId = "EBAY_US",
+  attemptIndex
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  marketplaceId?: string;
+  attemptIndex?: number;
+}): Promise<FulfillmentPolicyStepResult> {
+  const config = getEbayConfig();
+
+  if (config.environment !== "sandbox") {
+    throw new EbayIntegrationError(
+      "Fulfillment policy retry is available for sandbox only.",
+      "PRODUCTION_DISABLED",
+      getEbayErrorRecommendation("PRODUCTION_DISABLED")
+    );
+  }
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "ebay_policies",
+    message: "ebay_fulfillment_step_started",
+    metadata: { marketplaceId, attemptIndex: attemptIndex ?? null }
+  });
+
+  const { account, accessToken } = await getValidEbayAccessToken({
+    supabase,
+    userId,
+    marketplace: marketplaceId
+  });
+  const existing = await getSellerPolicyCollections(accessToken, marketplaceId);
+  const existingFulfillment = chooseDefaultPolicy(existing.fulfillment.fulfillmentPolicies, marketplaceId);
+
+  if (existingFulfillment || account.fulfillment_policy_id) {
+    const synced = await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
+
+    return {
+      ok: true,
+      completed: true,
+      nextAttemptIndex: null,
+      attempt: null,
+      fulfillmentPolicyStored: Boolean(synced.policies.fulfillmentPolicy ?? account.fulfillment_policy_id),
+      message: "Fulfillment policy already exists and was synced.",
+      attempts: []
+    };
+  }
+
+  const discovery = await discoverShippingServicesWithFallback(accessToken);
+  const attempts = buildStepFulfillmentPolicyAttempts(getPreferredDomesticShippingServices(discovery.services));
+  const resolvedAttemptIndex =
+    attemptIndex == null ? await resolveNextFulfillmentAttemptIndex({ supabase, userId, attempts }) : attemptIndex;
+  const attempt = attempts[resolvedAttemptIndex];
+
+  if (!attempt) {
+    return {
+      ok: false,
+      completed: true,
+      nextAttemptIndex: null,
+      attempt: null,
+      fulfillmentPolicyStored: false,
+      message: "All fulfillment policy attempts have been tried. eBay sandbox did not create a fulfillment policy.",
+      attempts: []
+    };
+  }
+
+  const attemptResult: FulfillmentPolicyAttemptResult = {
+    attemptNumber: attempt.attemptNumber,
+    attemptIndex: resolvedAttemptIndex,
+    serviceCode: attempt.shippingServiceCode,
+    shippingServiceCode: attempt.shippingServiceCode,
+    schemaVariant: attempt.schema,
+    schema: attempt.schema,
+    status: "started",
+    timeoutMs: FULFILLMENT_POLICY_STEP_TIMEOUT_MS,
+    shippingCostIncluded: attempt.includeShippingCost,
+    ebayErrors: []
+  };
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "ebay_policies",
+    message: "ebay_fulfillment_step_attempt",
+    metadata: {
+      marketplaceId,
+      attemptIndex: resolvedAttemptIndex,
+      attemptNumber: attempt.attemptNumber,
+      serviceCode: attempt.shippingServiceCode,
+      shippingServiceCode: attempt.shippingServiceCode,
+      shippingCarrierCode: attempt.shippingCarrierCode,
+      schemaVariant: attempt.schema,
+      schema: attempt.schema,
+      timeoutMs: FULFILLMENT_POLICY_STEP_TIMEOUT_MS,
+      shippingCostIncluded: attempt.includeShippingCost
+    }
+  });
+
+  try {
+    const created = await ebayFetch<SellerPolicy>({
+      accessToken,
+      marketplaceId,
+      method: "POST",
+      path: "/sell/account/v1/fulfillment_policy",
+      body: buildDefaultFulfillmentPolicyBody(marketplaceId, attempt),
+      timeoutMs: FULFILLMENT_POLICY_STEP_TIMEOUT_MS,
+      timeoutCode: "FULFILLMENT_POLICY_CREATE_FAILED"
+    });
+    attemptResult.status = "success";
+    attemptResult.message = `Fulfillment policy created with ${attempt.shippingServiceCode}.`;
+
+    await logDefaultPolicyCreated(supabase, userId, "ebay_default_fulfillment_policy_created", marketplaceId, {
+      policyId: created.fulfillmentPolicyId,
+      policyName: created.name,
+      attemptIndex: resolvedAttemptIndex,
+      serviceCode: attempt.shippingServiceCode,
+      schemaVariant: attempt.schema
+    });
+    const synced = await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
+
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "success",
+      module: "ebay_policies",
+      message: "ebay_fulfillment_step_success",
+      metadata: { ...attemptResult }
+    });
+
+    return {
+      ok: true,
+      completed: true,
+      nextAttemptIndex: null,
+      attempt: attemptResult,
+      fulfillmentPolicyStored: Boolean(synced.policies.fulfillmentPolicy),
+      message: "Fulfillment policy created and synced.",
+      attempts: [attemptResult]
+    };
+  } catch (error) {
+    const timedOut = isFulfillmentPolicyTimeoutError(error);
+    attemptResult.status = timedOut ? "timeout" : "failed";
+    attemptResult.message = timedOut
+      ? "eBay fulfillment policy request timed out"
+      : error instanceof Error
+        ? error.message
+        : "eBay fulfillment policy request failed";
+    attemptResult.ebayErrors = extractEbayErrorSummaries(error);
+
+    await logAutomationEvent({
+      supabase,
+      userId,
+      level: "warning",
+      module: "ebay_policies",
+      message: "ebay_fulfillment_step_failed",
+      metadata: {
+        marketplaceId,
+        ...attemptResult
+      }
+    });
+
+    return {
+      ok: false,
+      completed: resolvedAttemptIndex + 1 >= attempts.length,
+      nextAttemptIndex: resolvedAttemptIndex + 1 < attempts.length ? resolvedAttemptIndex + 1 : null,
+      attempt: attemptResult,
+      fulfillmentPolicyStored: false,
+      message: timedOut
+        ? "eBay sandbox timed out while creating the fulfillment policy. Try the next attempt; if it repeats, inspect Policy creation details."
+        : "Fulfillment policy attempt failed. Try the next attempt.",
+      attempts: [attemptResult]
+    };
+  }
+}
+
 export async function syncSellerPolicies({
   supabase,
   userId,
@@ -765,6 +956,7 @@ function buildDefaultFulfillmentPolicyBody(
   const shippingService: Record<string, unknown> = {
     buyerResponsibleForShipping: attempt.buyerResponsibleForShipping,
     freeShipping: attempt.freeShipping,
+    sortOrder: 1,
     shippingCarrierCode: attempt.shippingCarrierCode,
     shippingServiceCode: attempt.shippingServiceCode
   };
@@ -878,6 +1070,94 @@ function buildFulfillmentPolicyAttempts(candidates: EbayShippingService[]): Fulf
   });
 
   return attempts;
+}
+
+function buildStepFulfillmentPolicyAttempts(candidates: EbayShippingService[]): FulfillmentPolicyAttempt[] {
+  const discoveredByCode = new Map(candidates.map((candidate) => [candidate.shippingService, candidate]));
+  const preferredCodes = [
+    "USPSFirstClass",
+    "USPSPriority",
+    "UPSGround",
+    "FedExHomeDelivery",
+    "USPSPriorityFlatRateBox"
+  ];
+  const attempts: FulfillmentPolicyAttempt[] = [];
+  const pushAttempt = (
+    shippingServiceCode: string,
+    schema: "free_shipping_minimal" | "buyer_paid_minimal"
+  ) => {
+    attempts.push({
+      attemptNumber: attempts.length + 1,
+      schema,
+      shippingServiceCode,
+      shippingCarrierCode: inferShippingCarrierCode(shippingServiceCode),
+      includeShippingCost: schema === "buyer_paid_minimal",
+      freeShipping: schema === "free_shipping_minimal",
+      buyerResponsibleForShipping: schema === "buyer_paid_minimal",
+      shippingCostValue: schema === "buyer_paid_minimal" ? "5.00" : undefined,
+      additionalShippingCostValue: schema === "buyer_paid_minimal" ? "0.00" : undefined
+    });
+  };
+
+  pushAttempt("USPSFirstClass", "free_shipping_minimal");
+  pushAttempt("USPSFirstClass", "buyer_paid_minimal");
+  pushAttempt("USPSPriority", "free_shipping_minimal");
+  pushAttempt("USPSPriority", "buyer_paid_minimal");
+  pushAttempt("UPSGround", "buyer_paid_minimal");
+  pushAttempt("FedExHomeDelivery", "buyer_paid_minimal");
+  pushAttempt("USPSPriorityFlatRateBox", "free_shipping_minimal");
+
+  for (const candidate of candidates) {
+    if (!candidate.shippingService || preferredCodes.includes(candidate.shippingService)) {
+      continue;
+    }
+
+    if (discoveredByCode.has(candidate.shippingService)) {
+      pushAttempt(candidate.shippingService, "buyer_paid_minimal");
+    }
+  }
+
+  return attempts;
+}
+
+async function resolveNextFulfillmentAttemptIndex({
+  supabase,
+  userId,
+  attempts
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  attempts: FulfillmentPolicyAttempt[];
+}) {
+  const { data } = await supabase
+    .from("automation_logs")
+    .select("metadata_json")
+    .eq("user_id", userId)
+    .eq("module", "ebay_policies")
+    .in("message", ["ebay_fulfillment_step_attempt", "ebay_fulfillment_step_failed", "ebay_fulfillment_step_success"])
+    .order("created_at", { ascending: false })
+    .limit(30);
+  const tried = new Set<number>();
+
+  for (const row of data ?? []) {
+    const metadata = (row as { metadata_json?: unknown }).metadata_json;
+    if (!metadata || typeof metadata !== "object") {
+      continue;
+    }
+
+    const index = Number((metadata as { attemptIndex?: unknown }).attemptIndex);
+    if (Number.isInteger(index) && index >= 0) {
+      tried.add(index);
+    }
+  }
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    if (!tried.has(index)) {
+      return index;
+    }
+  }
+
+  return attempts.length;
 }
 
 function buildStoredPolicyFallback(

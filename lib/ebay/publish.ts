@@ -143,6 +143,14 @@ export async function publishListingDraftToEbaySandbox({
       metadata: { draftId, sku }
     });
 
+    if (!account.fulfillment_policy_id && isSandboxPolicyFallbackAllowed()) {
+      throw new EbayIntegrationError(
+        "Sandbox policy fallback is enabled, so readiness can test inventory setup, but eBay still requires a fulfillment policy before offer publish.",
+        "MISSING_POLICY_ID",
+        "Run step-based fulfillment retry in Settings, then sync seller policies."
+      );
+    }
+
     const offer = await createOffer(accessToken, {
       sku,
       marketplaceId: resolvedMarketplaceId,
@@ -369,7 +377,14 @@ function validateDraftForPublish(draft: ListingDraftRow) {
 }
 
 function validateAccountForPublish(account: EbayAccountRecord) {
-  if (!hasRequiredSellerSetup(account)) {
+  const missingFulfillmentOnly =
+    account.payment_policy_id &&
+    account.return_policy_id &&
+    !account.fulfillment_policy_id &&
+    account.inventory_location_key &&
+    isSandboxPolicyFallbackAllowed();
+
+  if (!hasRequiredSellerSetup(account) && !missingFulfillmentOnly) {
     throw new EbayIntegrationError(
       "eBay sandbox seller setup is incomplete.",
       !account.inventory_location_key ? "MISSING_LOCATION" : "MISSING_POLICY_ID",
@@ -378,6 +393,10 @@ function validateAccountForPublish(account: EbayAccountRecord) {
         : getEbayErrorRecommendation("MISSING_POLICY_ID")
     );
   }
+}
+
+function isSandboxPolicyFallbackAllowed() {
+  return process.env.EBAY_ENVIRONMENT !== "production" && process.env.ALLOW_SANDBOX_POLICY_FALLBACK === "true";
 }
 
 function getDraftProduct(draft: ListingDraftRow) {

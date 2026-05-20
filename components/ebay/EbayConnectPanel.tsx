@@ -36,7 +36,16 @@ interface ProgramStatus {
 }
 
 type MessageTone = "success" | "error" | "warning";
-type BusyAction = "policies" | "createDefaults" | "retryFulfillment" | "location" | "disconnect" | "optIn" | "discoverServices";
+type BusyAction =
+  | "policies"
+  | "createDefaults"
+  | "retryFulfillment"
+  | "retryFulfillmentStep"
+  | "autoFulfillmentSteps"
+  | "location"
+  | "disconnect"
+  | "optIn"
+  | "discoverServices";
 const CLIENT_ACTION_TIMEOUT_MS = 25_000;
 
 interface ShippingServiceSummary {
@@ -66,6 +75,18 @@ interface PolicyActionPayload {
   fulfillmentPolicyStored?: boolean;
   paymentPolicyStored?: boolean;
   returnPolicyStored?: boolean;
+}
+
+interface FulfillmentStepPayload {
+  ok?: boolean;
+  completed?: boolean;
+  nextAttemptIndex?: number | null;
+  attempt?: PolicyAttemptRecord | null;
+  attempts?: unknown[];
+  fulfillmentPolicyStored?: boolean;
+  message?: string;
+  error?: string;
+  recommendation?: string;
 }
 
 interface PolicyAttemptRecord {
@@ -104,6 +125,8 @@ export function EbayConnectPanel({
   const [programLoading, setProgramLoading] = useState(false);
   const [shippingServices, setShippingServices] = useState<ShippingServiceSummary[] | null>(null);
   const [policyAttemptDetails, setPolicyAttemptDetails] = useState<PolicyAttemptDetails | null>(null);
+  const [fulfillmentStepIndex, setFulfillmentStepIndex] = useState(0);
+  const [fulfillmentStepHistory, setFulfillmentStepHistory] = useState<PolicyAttemptRecord[]>([]);
   const hasAllSellerPolicies = Boolean(paymentPolicy && returnPolicy && fulfillmentPolicy);
   const canCreateDefaultPolicies =
     connected && Boolean(programStatus?.sellingPolicyManagement?.active) && !hasAllSellerPolicies;
@@ -252,21 +275,92 @@ export function EbayConnectPanel({
     }
   }
 
-  async function retryFulfillmentPolicy() {
-    setBusy("retryFulfillment");
+  async function retryFulfillmentPolicyStep(attemptIndex?: number, mode: "single" | "auto" = "single") {
+    setBusy(mode === "auto" ? "autoFulfillmentSteps" : "retryFulfillmentStep");
     setMessage("");
 
     try {
-      const response = await fetchWithTimeout("/api/ebay/policies/retry-fulfillment", { method: "POST" });
-      const payload = await readJsonPayload<PolicyActionPayload>(response);
+      const payload = await runFulfillmentStepRequest(attemptIndex);
 
-      handlePolicyActionPayload(payload, "Fulfillment policy created and synced.");
+      handleFulfillmentStepPayload(payload);
     } catch (error) {
       await logPolicyUiTimeoutIfNeeded(error);
       setMessageTone("error");
       setMessage(getClientFetchErrorMessage(error));
     } finally {
-      setBusy((current) => (current === "retryFulfillment" ? null : current));
+      setBusy((current) => (current === "retryFulfillmentStep" || current === "autoFulfillmentSteps" ? null : current));
+    }
+  }
+
+  async function autoRunFulfillmentSteps() {
+    setBusy("autoFulfillmentSteps");
+    setMessage("");
+
+    try {
+      let nextIndex: number | null = fulfillmentStepHistory.length ? fulfillmentStepIndex : null;
+      let lastPayload: FulfillmentStepPayload | null = null;
+
+      for (let step = 0; step < 8 && nextIndex != null; step += 1) {
+        const payload = await runFulfillmentStepRequest(nextIndex);
+        lastPayload = payload;
+        handleFulfillmentStepPayload(payload);
+
+        if (payload.completed || payload.fulfillmentPolicyStored) {
+          break;
+        }
+
+        nextIndex = typeof payload.nextAttemptIndex === "number" ? payload.nextAttemptIndex : null;
+      }
+
+      if (lastPayload && !lastPayload.fulfillmentPolicyStored && !lastPayload.completed) {
+        setMessageTone("warning");
+        setMessage("Fulfillment attempts paused before completion. Click Auto-run attempts one by one again to continue.");
+      }
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === "autoFulfillmentSteps" ? null : current));
+    }
+  }
+
+  async function runFulfillmentStepRequest(attemptIndex?: number | null) {
+    const response = await fetchWithTimeout("/api/ebay/policies/retry-fulfillment-step", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(typeof attemptIndex === "number" ? { attemptIndex } : {})
+    });
+
+    return readJsonPayload<FulfillmentStepPayload>(response);
+  }
+
+  function handleFulfillmentStepPayload(payload: FulfillmentStepPayload) {
+    const attempt = payload.attempt ?? (Array.isArray(payload.attempts) ? (payload.attempts[0] as PolicyAttemptRecord | undefined) : null);
+
+    if (attempt) {
+      setFulfillmentStepHistory((current) => [...current, attempt]);
+      setPolicyAttemptDetails((current) => ({
+        ...current,
+        attempts: [...(Array.isArray(current?.attempts) ? current.attempts : []), attempt]
+      }));
+    }
+
+    if (typeof payload.nextAttemptIndex === "number") {
+      setFulfillmentStepIndex(payload.nextAttemptIndex);
+    }
+
+    setMessageTone(payload.fulfillmentPolicyStored || payload.ok ? "success" : payload.completed ? "error" : "warning");
+    setMessage(
+      payload.message ??
+        payload.error ??
+        (payload.fulfillmentPolicyStored
+          ? "Fulfillment policy created and synced."
+          : "Fulfillment policy attempt finished. Try the next attempt.")
+    );
+
+    if (payload.fulfillmentPolicyStored) {
+      router.refresh();
     }
   }
 
@@ -417,14 +511,14 @@ export function EbayConnectPanel({
         {canCreateDefaultPolicies ? (
           <Button
             variant="secondary"
-            onClick={paymentPolicy && returnPolicy && !fulfillmentPolicy ? retryFulfillmentPolicy : createDefaultSellerPolicies}
-            disabled={programLoading || busy === "createDefaults" || busy === "retryFulfillment"}
+            onClick={paymentPolicy && returnPolicy && !fulfillmentPolicy ? () => retryFulfillmentPolicyStep() : createDefaultSellerPolicies}
+            disabled={programLoading || busy === "createDefaults" || busy === "retryFulfillmentStep"}
           >
             <Building2 size={16} />{" "}
-            {busy === "createDefaults" || busy === "retryFulfillment"
+            {busy === "createDefaults" || busy === "retryFulfillmentStep"
               ? "Creating..."
               : paymentPolicy && returnPolicy && !fulfillmentPolicy
-                ? "Retry fulfillment policy"
+                ? "Retry next fulfillment attempt"
                 : "Create default seller policies"}
           </Button>
         ) : null}
@@ -453,7 +547,15 @@ export function EbayConnectPanel({
         </Button>
       </div>
 
-      {showManualFulfillmentFallback ? <ManualFulfillmentFallback /> : null}
+      {showManualFulfillmentFallback ? (
+        <ManualFulfillmentFallback
+          stepIndex={fulfillmentStepIndex}
+          history={fulfillmentStepHistory}
+          busy={busy}
+          onRetryNext={() => retryFulfillmentPolicyStep()}
+          onAutoRun={autoRunFulfillmentSteps}
+        />
+      ) : null}
       {shippingServices?.length ? <ShippingServicesPanel services={shippingServices} /> : null}
       {policyAttemptDetails ? <PolicyAttemptDetailsPanel details={policyAttemptDetails} /> : null}
 
@@ -469,15 +571,48 @@ export function EbayConnectPanel({
   );
 }
 
-function ManualFulfillmentFallback() {
+function ManualFulfillmentFallback({
+  stepIndex,
+  history,
+  busy,
+  onRetryNext,
+  onAutoRun
+}: {
+  stepIndex: number;
+  history: PolicyAttemptRecord[];
+  busy: BusyAction | null;
+  onRetryNext: () => void;
+  onAutoRun: () => void;
+}) {
   return (
     <div className="mt-4 rounded-md border border-ink-200 bg-ink-50 p-4 text-sm text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200">
       <p className="font-semibold">
         Payment and return policies are ready, but fulfillment policy is still missing.
       </p>
       <p className="mt-2">
-        Use Discover shipping services, then Retry fulfillment policy. If discovery fails too, the fallback instructions below are still available.
+        Use step-based retries so each eBay sandbox shipping policy attempt returns quickly with visible details.
       </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button variant="secondary" onClick={onRetryNext} disabled={busy === "retryFulfillmentStep"}>
+          <RefreshCcw size={16} /> {busy === "retryFulfillmentStep" ? "Trying..." : `Retry next fulfillment attempt (${stepIndex + 1})`}
+        </Button>
+        <Button variant="secondary" onClick={onAutoRun} disabled={busy === "autoFulfillmentSteps"}>
+          <RefreshCcw size={16} /> {busy === "autoFulfillmentSteps" ? "Running..." : "Auto-run attempts one by one"}
+        </Button>
+      </div>
+      {history.length ? (
+        <div className="mt-3 space-y-2">
+          <p className="font-medium">Fulfillment attempt history</p>
+          {history.slice(-8).map((attempt, index) => (
+            <div key={`${attempt.serviceCode ?? attempt.shippingServiceCode}-${attempt.schemaVariant ?? attempt.schema}-${index}`} className="rounded-md bg-white/70 p-2 dark:bg-white/[0.06]">
+              <p className="font-medium">
+                {attempt.serviceCode ?? attempt.shippingServiceCode ?? "Unknown service"} · {attempt.schemaVariant ?? attempt.schema ?? "schema"} · {attempt.status ?? "started"}
+              </p>
+              <p className="text-xs opacity-80">{attempt.message ?? `Attempt ${attempt.attemptNumber ?? index + 1}`}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

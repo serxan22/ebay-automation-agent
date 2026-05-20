@@ -4,6 +4,7 @@ import { telegramIntentSystemPrompt } from "@/lib/ai/prompts/telegram-intent";
 import type { AutomationSettings } from "@/lib/types";
 
 export const TelegramIntentNameSchema = z.enum([
+  "SHOW_SYSTEM_HEALTH",
   "RESUME_AUTOMATION",
   "PAUSE_AUTOMATION",
   "SHOW_STATUS",
@@ -20,9 +21,15 @@ export const TelegramIntentNameSchema = z.enum([
   "APPROVE_DRAFTS",
   "REVISE_DRAFT_HELP",
   "SHOW_EBAY_READINESS",
+  "DISCOVER_SHIPPING_SERVICES",
+  "RETRY_FULFILLMENT_STEP",
   "SYNC_EBAY_POLICIES",
   "CREATE_DEFAULT_EBAY_POLICIES",
   "SETUP_EBAY_LOCATION",
+  "IMPROVE_LISTING_COPY",
+  "OPTIMIZE_IMAGES",
+  "SHOW_READY_DRAFTS",
+  "PUBLISH_READY_DRAFTS_SANDBOX",
   "PUBLISH_SAFE_DRAFTS_SANDBOX",
   "SHOW_FAILED_TASKS",
   "UPDATE_BLOCKED_CATEGORY",
@@ -294,10 +301,26 @@ export function parseTelegramIntentHeuristically(
   }
 
   if (isEbayReadinessRequest(text)) {
-    return makeIntent("SHOW_EBAY_READINESS", language, {
+    return makeIntent(/problem|nə problem|ne problem|catmir|çatmır/.test(text) ? "SHOW_SYSTEM_HEALTH" : "SHOW_EBAY_READINESS", language, {
       parameters: { ...parameters, user_question: message },
       confidence: 0.9,
       safe_response: "eBay sandbox readiness statusunu yoxlayıram."
+    });
+  }
+
+  if (/shipping service|shipping services|discover shipping|kargo service|çatdırılma service/.test(text)) {
+    return makeIntent("DISCOVER_SHIPPING_SERVICES", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.9,
+      safe_response: "Sandbox shipping services yoxlanılır."
+    });
+  }
+
+  if (/fulfillment|shipping policy|retry fulfillment|fulfillment niye|fulfillment niyə/.test(text)) {
+    return makeIntent("RETRY_FULFILLMENT_STEP", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.88,
+      safe_response: "Fulfillment policy üçün növbəti sandbox cəhdi işə salınır."
     });
   }
 
@@ -425,7 +448,39 @@ export function parseTelegramIntentHeuristically(
     });
   }
 
-  if (/problem|issue|xeta|xəta|hata|supplier|izah|explain|insan kimi/.test(text)) {
+  if (/sistem statusu|ne problem|nə problem|problem var|catmir|çatmır|issue|xeta|xəta|hata/.test(text)) {
+    return makeIntent("SHOW_SYSTEM_HEALTH", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.88,
+      safe_response: "Sistem checklistini yoxlayıram."
+    });
+  }
+
+  if (/description|title|seo|premium|copy|cəlbedici|celbedici|listingleri premium|listingləri premium/.test(text)) {
+    return makeIntent("IMPROVE_LISTING_COPY", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.82,
+      safe_response: "Listing copy yenilənəcək; publish avtomatik edilməyəcək."
+    });
+  }
+
+  if (/sekil|şəkil|image|images|optimize|hazirla|hazırla/.test(text)) {
+    return makeIntent("OPTIMIZE_IMAGES", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.8,
+      safe_response: "Draft şəkilləri yoxlanılacaq və mümkün olsa optimizasiya ediləcək."
+    });
+  }
+
+  if (/ready draft|hazir draft|hazır draft|publish ucun hazir|publish üçün hazır/.test(text)) {
+    return makeIntent("SHOW_READY_DRAFTS", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.84,
+      safe_response: "Publish-ready draftları yoxlayıram."
+    });
+  }
+
+  if (/problem|issue|supplier|izah|explain|insan kimi/.test(text)) {
     return makeIntent("EXPLAIN_SYSTEM", language, {
       parameters: { ...parameters, user_question: message },
       confidence: 0.76,
