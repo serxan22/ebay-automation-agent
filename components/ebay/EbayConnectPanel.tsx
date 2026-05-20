@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, KeyRound, LogOut, MapPin, RefreshCcw, ShieldCheck } from "lucide-react";
+import { Building2, ExternalLink, KeyRound, LogOut, MapPin, RefreshCcw, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 interface EbayConnectPanelProps {
@@ -62,6 +62,10 @@ export function EbayConnectPanel({
   const hasAllSellerPolicies = Boolean(paymentPolicy && returnPolicy && fulfillmentPolicy);
   const canCreateDefaultPolicies =
     connected && Boolean(programStatus?.sellingPolicyManagement?.active) && !hasAllSellerPolicies;
+  const showManualFulfillmentFallback =
+    connected &&
+    Boolean(programStatus?.sellingPolicyManagement?.active) &&
+    Boolean(paymentPolicy && returnPolicy && !fulfillmentPolicy);
 
   const refreshPrograms = useCallback(async (showMessage = false) => {
     setProgramLoading(true);
@@ -295,6 +299,8 @@ export function EbayConnectPanel({
         </Button>
       </div>
 
+      {showManualFulfillmentFallback ? <ManualFulfillmentFallback /> : null}
+
       {warningMessage ? (
         <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
           {warningMessage}
@@ -304,6 +310,37 @@ export function EbayConnectPanel({
 
       {message ? <div className={getMessageClassName(messageTone)}>{message}</div> : null}
     </section>
+  );
+}
+
+function ManualFulfillmentFallback() {
+  return (
+    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
+      <p className="font-semibold">
+        Payment and return policies are ready, but eBay sandbox rejected automatic fulfillment policy creation.
+      </p>
+      <p className="mt-2">
+        Create a fulfillment/shipping policy manually in the sandbox seller account, then click Sync seller policies.
+      </p>
+      <ol className="mt-3 list-inside list-decimal space-y-1">
+        <li>Open eBay sandbox seller account settings.</li>
+        <li>Go to Business Policies.</li>
+        <li>Create a Shipping/Fulfillment policy.</li>
+        <li>Domestic shipping: USPS Priority or USPS Priority Flat Rate Box.</li>
+        <li>Handling time: 1 day.</li>
+        <li>Use free shipping or flat $5 shipping.</li>
+        <li>Save.</li>
+        <li>Return to the app and click Sync seller policies.</li>
+      </ol>
+      <a
+        href="https://www.sandbox.ebay.com/sh/landing"
+        target="_blank"
+        rel="noreferrer"
+        className="mt-3 inline-flex items-center gap-2 rounded-md bg-ink-950 px-3 py-2 text-xs font-medium text-white hover:bg-ink-800 dark:bg-mint-500 dark:text-ink-950"
+      >
+        <ExternalLink size={14} /> Open sandbox seller settings
+      </a>
+    </div>
   );
 }
 

@@ -83,9 +83,10 @@ function buildPartialPolicyMessage(
 
   if (missing.includes("fulfillment policy") && hasPaymentAndReturn) {
     return [
-      "Payment and return policies were created, but fulfillment policy failed because sandbox rejected the shipping service code.",
+      "Payment and return policies are ready, but eBay sandbox rejected automatic fulfillment policy creation.",
+      "Create a fulfillment/shipping policy manually in the sandbox seller account, then click Sync seller policies.",
       fulfillmentError ? `Last fulfillment error: ${fulfillmentError}` : "",
-      "Click Create default seller policies again to retry the missing policy.",
+      "You can also click Create default seller policies again to retry the missing policy.",
       createdOrStored.length ? `Current policies: ${createdOrStored.join("; ")}.` : ""
     ]
       .filter(Boolean)
