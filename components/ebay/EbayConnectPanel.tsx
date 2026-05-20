@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Building2, KeyRound, LogOut, MapPin, RefreshCcw, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -22,6 +22,19 @@ interface EbayConnectPanelProps {
   inventoryLocation?: string | null;
 }
 
+interface ProgramStatus {
+  ok?: boolean;
+  programTypes?: string[];
+  sellingPolicyManagement?: {
+    active: boolean;
+    eligible: boolean;
+    canOptIn: boolean;
+    status: string;
+  };
+  error?: string;
+  recommendation?: string;
+}
+
 export function EbayConnectPanel({
   statusMessage,
   statusTone = "success",
@@ -41,7 +54,51 @@ export function EbayConnectPanel({
   const router = useRouter();
   const [message, setMessage] = useState(statusMessage ?? "");
   const [messageTone, setMessageTone] = useState(statusTone);
-  const [busy, setBusy] = useState<"policies" | "location" | "disconnect" | null>(null);
+  const [busy, setBusy] = useState<"policies" | "location" | "disconnect" | "optIn" | null>(null);
+  const [programStatus, setProgramStatus] = useState<ProgramStatus | null>(null);
+  const [programLoading, setProgramLoading] = useState(false);
+
+  const refreshPrograms = useCallback(async (showMessage = false) => {
+    setProgramLoading(true);
+
+    let payload: ProgramStatus;
+
+    try {
+      const response = await fetch("/api/ebay/programs");
+      payload = (await response.json()) as ProgramStatus;
+      setProgramStatus(payload);
+
+      if (showMessage) {
+        setMessageTone(response.ok ? "success" : "error");
+        setMessage(
+          response.ok
+            ? getProgramStatusMessage(payload)
+            : `${payload.error ?? "Could not check seller policy status."}${
+                payload.recommendation ? ` ${payload.recommendation}` : ""
+              }`
+        );
+      }
+    } catch {
+      payload = { ok: false, error: "Could not check seller policy status." };
+      setProgramStatus(payload);
+
+      if (showMessage) {
+        setMessageTone("error");
+        setMessage(payload.error ?? "Could not check seller policy status.");
+      }
+    } finally {
+      setProgramLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!connected) {
+      setProgramStatus(null);
+      return;
+    }
+
+    void refreshPrograms();
+  }, [connected, refreshPrograms]);
 
   async function postAction(url: string, action: "policies" | "location") {
     setBusy(action);
@@ -62,6 +119,7 @@ export function EbayConnectPanel({
     const payload = (await response.json()) as {
       ok?: boolean;
       error?: string;
+      code?: string;
       recommendation?: string;
     };
 
@@ -72,11 +130,36 @@ export function EbayConnectPanel({
         ? action === "policies"
           ? "Seller policies synced from eBay sandbox."
           : "Inventory location checked and saved."
+        : payload.code === "SELLING_POLICY_NOT_OPTED_IN"
+          ? "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again."
         : `${payload.error ?? "Action failed."}${payload.recommendation ? ` ${payload.recommendation}` : ""}`
     );
 
     if (payload.ok) {
       router.refresh();
+    }
+  }
+
+  async function enableSellerPolicies() {
+    setBusy("optIn");
+    setMessage("");
+
+    const response = await fetch("/api/ebay/programs/opt-in-selling-policies", { method: "POST" });
+    const payload = (await response.json()) as { ok?: boolean; message?: string; error?: string; recommendation?: string };
+
+    setBusy(null);
+    setMessageTone(payload.ok ? "success" : "error");
+    setMessage(
+      payload.ok
+        ? payload.message ??
+            "Selling Policy Management opt-in requested. eBay may take some time to activate it. Try Sync seller policies again."
+        : `${payload.error ?? "Selling Policy Management opt-in failed."}${
+            payload.recommendation ? ` ${payload.recommendation}` : ""
+          }`
+    );
+
+    if (payload.ok) {
+      await refreshPrograms();
     }
   }
 
@@ -136,9 +219,21 @@ export function EbayConnectPanel({
 
       <div className="mt-3 grid gap-3 md:grid-cols-4">
         <ReadinessItem icon={<MapPin size={16} />} label="Inventory location" value={inventoryLocation} />
+        <ReadinessItem
+          icon={<ShieldCheck size={16} />}
+          label="Business policies"
+          value={getProgramStatusValue(programStatus, programLoading)}
+        />
       </div>
 
       <div className="mt-5 flex flex-wrap gap-2">
+        <Button
+          variant="secondary"
+          onClick={enableSellerPolicies}
+          disabled={!connected || busy !== null || programLoading || Boolean(programStatus?.sellingPolicyManagement?.active)}
+        >
+          <ShieldCheck size={16} /> {busy === "optIn" ? "Requesting..." : "Enable seller policies"}
+        </Button>
         <Button
           variant="secondary"
           onClick={() => postAction("/api/ebay/policies/sync", "policies")}
@@ -165,6 +260,32 @@ export function EbayConnectPanel({
       {message ? <div className={getMessageClassName(messageTone)}>{message}</div> : null}
     </section>
   );
+}
+
+function getProgramStatusValue(status: ProgramStatus | null, loading: boolean) {
+  if (loading) {
+    return "Checking...";
+  }
+
+  if (!status) {
+    return "Unknown";
+  }
+
+  if (!status.ok) {
+    return "Check failed";
+  }
+
+  return status.sellingPolicyManagement?.active ? "Active" : "Not opted in";
+}
+
+function getProgramStatusMessage(status: ProgramStatus) {
+  if (!status.ok) {
+    return status.error ?? "Could not check seller policy status.";
+  }
+
+  return status.sellingPolicyManagement?.active
+    ? "Selling Policy Management is active."
+    : "Selling Policy Management is not active yet. Click Enable seller policies, wait if needed, then sync again.";
 }
 
 function ReadinessItem({

@@ -20,6 +20,8 @@ export function getEbayErrorRecommendation(code: string) {
     TOKEN_EXCHANGE_FAILED: "Confirm EBAY_RUNAME matches the eBay Developer portal RuName and retry Connect sandbox.",
     TOKEN_EXPIRED: "Reconnect eBay or refresh the OAuth token before publishing.",
     PUBLISH_READINESS_FAILED: "Fix the listed readiness issues before publishing to eBay sandbox.",
+    SELLING_POLICY_NOT_OPTED_IN:
+      "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again.",
     MISSING_POLICY_ID: "Go to eBay settings and select payment, return, and fulfillment policies.",
     MISSING_LOCATION: "Create or select an eBay inventory location key.",
     INVALID_CATEGORY: "Review the suggested eBay category and required item specifics.",
@@ -49,6 +51,10 @@ export function classifyEbayError(status: number, payload: unknown) {
     return "RATE_LIMIT";
   }
 
+  if (isSellingPolicyManagementEligibilityError(payload)) {
+    return "SELLING_POLICY_NOT_OPTED_IN";
+  }
+
   if (/policy|paymentpolicyid|returnpolicyid|fulfillmentpolicyid|business polic/.test(text)) {
     return "MISSING_POLICY_ID";
   }
@@ -74,6 +80,12 @@ export function classifyEbayError(status: number, payload: unknown) {
   }
 
   return "PUBLISH_FAILED";
+}
+
+export function isSellingPolicyManagementEligibilityError(payload: unknown) {
+  const text = stringifyEbayPayload(payload).toLowerCase();
+
+  return text.includes("20403") || text.includes("user is not eligible for business policy");
 }
 
 export function stringifyEbayPayload(payload: unknown) {
