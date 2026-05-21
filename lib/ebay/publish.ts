@@ -129,7 +129,8 @@ export async function publishListingDraftToEbaySandbox({
     validateAccountForPublish(account);
 
     const sku = buildEbaySku(draft, product?.supplier_sku ?? undefined);
-    const { aspects, brand, mpn } = ensureBrandMpn(sanitizeAspects(draft.item_specifics ?? {}));
+    const sanitizedAspects = sanitizeAspects(draft.item_specifics ?? {});
+    const { aspects, brand, mpn } = ensureBrandMpn(normalizeAspectArrays(sanitizedAspects));
     const categoryId = draft.ebay_category_id ?? "";
 
     await updateDraftAttempt({ supabase, userId, draftId, attempt, status: "approved" });
@@ -143,9 +144,7 @@ export async function publishListingDraftToEbaySandbox({
       condition: normalizeCondition(draft.condition),
       brand,
       mpn,
-      aspects,
-      brand: typeof aspects.Brand === "string" ? aspects.Brand : product?.brand ?? undefined
-    });
+      aspects,});
 
     await logAutomationEvent({
       supabase,
@@ -451,6 +450,18 @@ function getFirstAspectValue(aspects: Record<string, string[]>, key: string): st
   }
 
   return undefined;
+}
+
+
+function normalizeAspectArrays(aspects: Record<string, string | string[]>): Record<string, string[]> {
+  return Object.fromEntries(
+    Object.entries(aspects)
+      .map(([key, value]) => [
+        key,
+        Array.isArray(value) ? value.filter(Boolean) : [value].filter(Boolean),
+      ])
+      .filter(([, value]) => value.length > 0),
+  );
 }
 
 function ensureBrandMpn(aspects: Record<string, string[]>): {

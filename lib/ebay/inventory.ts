@@ -2,6 +2,7 @@ import { ebayFetch } from "@/lib/ebay/client";
 import { EbayIntegrationError } from "@/lib/ebay/errors";
 
 export interface InventoryItemInput {
+  mpn?: string;
   sku: string;
   title: string;
   description: string;
