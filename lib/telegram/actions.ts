@@ -1,3 +1,4 @@
+import { chooseProductImageUrls } from "@/lib/listings/image-safety";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getEbayAccount, getValidEbayAccessToken } from "@/lib/ebay/account";
@@ -948,7 +949,7 @@ async function createDraftFromCandidate({
         condition: draft.condition,
         quantity: fallbackUsed ? Math.max(1, Math.min(candidate.product.stockQuantity || 1, 1)) : draft.quantity,
         price: draft.price,
-        optimized_image_urls: draft.optimizedImageUrls,
+        optimized_image_urls: Array.isArray(candidate.product.imageUrls) && candidate.product.imageUrls.length ? candidate.product.imageUrls : draft.optimizedImageUrls,
         image_validation_status: isSupabaseImageStorageConfigured() ? "optimized" : "external",
         image_validation_warnings: [
           ...imageResult.warnings,
@@ -1741,11 +1742,10 @@ async function optimizeImagesFromTelegram({ supabase, userId, quantity }: Action
 
   for (const row of (data ?? []) as Array<Record<string, any>>) {
     const product = getEmbeddedRow(row.supplier_products);
-    const sourceUrls = Array.isArray(row.optimized_image_urls) && row.optimized_image_urls.length
-      ? row.optimized_image_urls
-      : Array.isArray(product?.image_urls)
-        ? product.image_urls
-        : [];
+    const sourceUrls = chooseProductImageUrls({
+      supplierImageUrls: product?.image_urls,
+      optimizedImageUrls: row.optimized_image_urls,
+    });
     const result = await optimizeProductImages({
       imageUrls: sourceUrls,
       userId,

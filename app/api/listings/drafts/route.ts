@@ -1,3 +1,4 @@
+import { chooseProductImageUrls } from "@/lib/listings/image-safety";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { logAutomationEvent } from "@/lib/automation/logging";
@@ -356,7 +357,10 @@ export async function PATCH(request: Request) {
 
       const row = draftRow as Record<string, any>;
       const productRow = getEmbeddedRow(row.supplier_products);
-      const sourceUrls = getSourceImageUrls(row.optimized_image_urls, productRow?.image_urls);
+      const sourceUrls = chooseProductImageUrls({
+        supplierImageUrls: productRow?.image_urls,
+        optimizedImageUrls: row.optimized_image_urls,
+      });
 
       if (payload.action === "validate_images") {
         const results = await Promise.all(sourceUrls.slice(0, 8).map((url) => validateImageUrl(url)));
