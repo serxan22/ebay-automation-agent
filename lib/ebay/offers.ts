@@ -16,32 +16,65 @@ export interface EbayOfferInput {
   fulfillmentPolicyId: string;
 }
 
+
+function normalizeOfferInput(input: EbayOfferInput): EbayOfferInput {
+  return {
+    ...input,
+    format: input.format ?? "FIXED_PRICE",
+    currency: input.currency || "USD",
+    price: Number(input.price || 1),
+  };
+}
+
 export async function createOffer(accessToken: string, input: EbayOfferInput) {
+  const normalizedInput = normalizeOfferInput(input);
+
   try {
     return await ebayFetch<{ offerId: string }>({
       accessToken,
       method: "POST",
       path: "/sell/inventory/v1/offer",
-      body: {
-        ...input,
-        format: input.format ?? "FIXED_PRICE",
-      },
+      body: normalizedInput,
     });
   } catch (error) {
-    const responseBody = (error as { ebay?: { responseBody?: unknown } })?.ebay?.responseBody as
-      | { errors?: Array<{ message?: string; parameters?: Array<{ name?: string; value?: string }> }> }
-      | undefined;
+    const anyError = error as {
+      ebay?: {
+        responseBody?: {
+          errors?: Array<{
+            message?: string;
+            parameters?: Array<{ name?: string; value?: string }>;
+          }>;
+        };
+      };
+      message?: string;
+    };
 
-    const existingOfferId = responseBody?.errors
-      ?.find((item) => item.message?.toLowerCase().includes("offer entity already exists"))
+    const ebayErrors = anyError.ebay?.responseBody?.errors ?? [];
+    const existingOfferId = ebayErrors
+      .find((item) => item.message?.toLowerCase().includes("offer entity already exists"))
       ?.parameters?.find((parameter) => parameter.name === "offerId")?.value;
 
     if (existingOfferId) {
+      await updateOffer(accessToken, existingOfferId, normalizedInput);
       return { offerId: existingOfferId };
     }
 
     throw error;
   }
+}
+
+
+export async function updateOffer(accessToken: string, offerId: string, input: EbayOfferInput) {
+  if (!offerId) {
+    throw new Error("Missing eBay offer id");
+  }
+
+  return ebayFetch<{ offerId: string }>({
+    accessToken,
+    method: "PUT",
+    path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
+    body: normalizeOfferInput(input),
+  });
 }
 
 export async function publishOffer(accessToken: string, offerId: string) {
