@@ -3,6 +3,8 @@ import { z } from "zod";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getConfiguredAiProvider } from "@/lib/ai";
 import { generateListing } from "@/lib/ai/generate-listing";
+import { optimizeProductImages } from "@/lib/images/optimize-product-images";
+import { validateImageUrl } from "@/lib/images/validate-image";
 import {
   createListingDraft,
   createSafeFallbackListingGeneration
@@ -30,6 +32,14 @@ const updateDraftSchema = z.discriminatedUnion("action", [
     draftId: z.string().uuid()
   }),
   z.object({
+    action: z.literal("validate_images"),
+    draftId: z.string().uuid()
+  }),
+  z.object({
+    action: z.literal("optimize_images"),
+    draftId: z.string().uuid()
+  }),
+  z.object({
     action: z.literal("revise"),
     draftId: z.string().uuid(),
     ebayTitle: z.string().trim().min(5).max(80),
@@ -37,6 +47,10 @@ const updateDraftSchema = z.discriminatedUnion("action", [
     price: z.number().min(0),
     quantity: z.number().int().min(1),
     ebayCategoryId: z.string().trim().nullable().optional(),
+    ebayCategoryName: z.string().trim().nullable().optional(),
+    ebayCategoryPath: z.string().trim().nullable().optional(),
+    categoryTreeId: z.string().trim().nullable().optional(),
+    categoryConfidence: z.number().min(0).max(1).nullable().optional(),
     itemSpecifics: z.record(itemSpecificValueSchema).default({}),
     optimizedImageUrls: z.array(z.string().trim().min(1)).default([])
   })
@@ -86,11 +100,20 @@ export async function POST(request: Request) {
         ebay_title: draft.ebayTitle,
         ebay_description: draft.ebayDescription,
         ebay_category_id: draft.ebayCategoryId,
+        ebay_category_name: draft.ebayCategoryName,
+        ebay_category_path: draft.ebayCategoryPath,
+        category_tree_id: draft.categoryTreeId,
+        category_confidence: draft.categoryConfidence,
         item_specifics: draft.itemSpecifics,
+        required_item_specifics: draft.requiredItemSpecifics,
+        missing_item_specifics: draft.missingItemSpecifics,
         condition: draft.condition,
         quantity: draft.quantity,
         price: draft.price,
         optimized_image_urls: draft.optimizedImageUrls,
+        image_validation_status: draft.imageValidationStatus,
+        image_validation_warnings: draft.imageValidationWarnings,
+        listing_quality_score: draft.listingQualityScore,
         status: draft.status,
         ai_generated: draft.aiGenerated
       })
@@ -284,6 +307,7 @@ export async function PATCH(request: Request) {
           ebay_title: generated.ebayTitle,
           ebay_description: generated.ebayDescription,
           item_specifics: generated.itemSpecifics,
+          listing_quality_score: generated.listingQualityScore ?? null,
           ai_generated: true,
           error_message: null,
           ebay_error_code: null,
@@ -310,6 +334,116 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ ok: true, message: "Listing copy regenerated.", draft: data, generatedListing: generated });
     }
 
+    if (payload.action === "validate_images" || payload.action === "optimize_images") {
+      const { data: draftRow, error: draftLoadError } = await supabase
+        .from("listing_drafts")
+        .select("id,supplier_product_id,optimized_image_urls,status,supplier_products(image_urls)")
+        .eq("id", payload.draftId)
+        .eq("user_id", user.id)
+        .neq("status", "published")
+        .maybeSingle();
+
+      if (draftLoadError) {
+        throw new Error(draftLoadError.message);
+      }
+
+      if (!draftRow) {
+        return NextResponse.json(
+          { error: "Draft was not found or cannot be changed after publishing." },
+          { status: 404 }
+        );
+      }
+
+      const row = draftRow as Record<string, any>;
+      const productRow = getEmbeddedRow(row.supplier_products);
+      const sourceUrls = getSourceImageUrls(row.optimized_image_urls, productRow?.image_urls);
+
+      if (payload.action === "validate_images") {
+        const results = await Promise.all(sourceUrls.slice(0, 8).map((url) => validateImageUrl(url)));
+        const invalid = results.filter((result) => !result.ok);
+        const status = sourceUrls.length === 0 ? "missing" : invalid.length > 0 ? "invalid" : "valid";
+        const warnings = [
+          ...invalid.map((result) => `${result.url}: ${result.reason ?? "Invalid image."}`),
+          ...(status === "valid" ? ["External image URLs are valid. Optimize/upload if Supabase Storage is configured."] : [])
+        ];
+
+        const { data, error } = await supabase
+          .from("listing_drafts")
+          .update({
+            optimized_image_urls: sourceUrls,
+            image_validation_status: status,
+            image_validation_warnings: warnings,
+            error_message: null,
+            ebay_error_code: null,
+            ebay_error_json: {}
+          })
+          .eq("id", payload.draftId)
+          .eq("user_id", user.id)
+          .select("id,image_validation_status,image_validation_warnings,optimized_image_urls")
+          .maybeSingle();
+
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        return NextResponse.json({
+          ok: invalid.length === 0 && sourceUrls.length > 0,
+          message:
+            sourceUrls.length === 0
+              ? "Missing image. Add at least one image URL."
+              : invalid.length
+                ? `Image validation found ${invalid.length} broken image(s).`
+                : "Image URLs validated.",
+          draft: data,
+          results
+        });
+      }
+
+      const shouldStore = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+      const optimized = await optimizeProductImages({
+        imageUrls: sourceUrls,
+        userId: user.id,
+        supplierProductId: String(row.supplier_product_id),
+        store: shouldStore,
+        maxImages: 8
+      });
+      const status = optimized.optimizedUrls.length === 0 ? "invalid" : shouldStore ? "optimized" : "external";
+      const warnings = [
+        ...optimized.warnings,
+        ...optimized.rejected.map((item) => `${item.url}: ${item.reason}`)
+      ];
+
+      const { data, error } = await supabase
+        .from("listing_drafts")
+        .update({
+          optimized_image_urls: optimized.optimizedUrls,
+          image_validation_status: status,
+          image_validation_warnings: warnings,
+          error_message: null,
+          ebay_error_code: null,
+          ebay_error_json: {}
+        })
+        .eq("id", payload.draftId)
+        .eq("user_id", user.id)
+        .select("id,image_validation_status,image_validation_warnings,optimized_image_urls")
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      return NextResponse.json({
+        ok: optimized.optimizedUrls.length > 0,
+        message: optimized.optimizedUrls.length
+          ? shouldStore
+            ? "Images validated and optimized to Supabase Storage."
+            : "Images validated. Supabase Storage is not configured, so external URLs were kept."
+          : "Image optimization failed; add a valid image URL.",
+        draft: data,
+        optimized
+      });
+    }
+
     const { data, error } = await supabase
       .from("listing_drafts")
       .update({
@@ -318,6 +452,10 @@ export async function PATCH(request: Request) {
         price: payload.price,
         quantity: payload.quantity,
         ebay_category_id: payload.ebayCategoryId || null,
+        ebay_category_name: payload.ebayCategoryName || null,
+        ebay_category_path: payload.ebayCategoryPath || null,
+        category_tree_id: payload.categoryTreeId || null,
+        category_confidence: payload.categoryConfidence ?? null,
         item_specifics: payload.itemSpecifics,
         optimized_image_urls: payload.optimizedImageUrls,
         status: "draft",
@@ -351,6 +489,8 @@ export async function PATCH(request: Request) {
       metadata: {
         draftId: payload.draftId,
         ebayCategoryId: payload.ebayCategoryId,
+        ebayCategoryName: payload.ebayCategoryName,
+        ebayCategoryPath: payload.ebayCategoryPath,
         price: payload.price,
         quantity: payload.quantity,
         imageCount: payload.optimizedImageUrls.length
@@ -369,4 +509,11 @@ export async function PATCH(request: Request) {
       { status: 400 }
     );
   }
+}
+
+function getSourceImageUrls(primary: unknown, fallback: unknown) {
+  const primaryUrls = Array.isArray(primary) ? primary.filter((url): url is string => typeof url === "string" && url.trim().length > 0) : [];
+  const fallbackUrls = Array.isArray(fallback) ? fallback.filter((url): url is string => typeof url === "string" && url.trim().length > 0) : [];
+
+  return Array.from(new Set(primaryUrls.length > 0 ? primaryUrls : fallbackUrls));
 }

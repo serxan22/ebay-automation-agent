@@ -20,11 +20,18 @@ export interface ListingDraftRow {
   ebay_title: string;
   ebay_description: string;
   ebay_category_id?: string | null;
+  ebay_category_name?: string | null;
+  ebay_category_path?: string | null;
+  category_tree_id?: string | null;
   item_specifics?: Record<string, string | string[]> | null;
+  required_item_specifics?: string[] | null;
+  missing_item_specifics?: string[] | null;
   condition: string;
   quantity: number;
   price: number;
   optimized_image_urls: string[];
+  image_validation_status?: string | null;
+  image_validation_warnings?: string[] | null;
   status: string;
   publish_attempts?: number | null;
   supplier_products?: DraftProductRow | DraftProductRow[] | null;
@@ -123,7 +130,7 @@ export async function publishListingDraftToEbaySandbox({
 
     const sku = buildEbaySku(draft, product?.supplier_sku ?? undefined);
     const aspects = sanitizeAspects(draft.item_specifics ?? {});
-    const categoryId = draft.ebay_category_id ?? process.env.EBAY_SANDBOX_FALLBACK_CATEGORY_ID ?? "";
+    const categoryId = draft.ebay_category_id ?? "";
 
     await updateDraftAttempt({ supabase, userId, draftId, attempt, status: "approved" });
 
@@ -333,7 +340,7 @@ async function loadDraftForPublish({
   const { data, error } = await supabase
     .from("listing_drafts")
     .select(
-      "id,user_id,supplier_product_id,ebay_title,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,status,publish_attempts,supplier_products(supplier_sku,currency,brand)"
+      "id,user_id,supplier_product_id,ebay_title,ebay_description,ebay_category_id,ebay_category_name,ebay_category_path,category_tree_id,item_specifics,required_item_specifics,missing_item_specifics,condition,quantity,price,optimized_image_urls,image_validation_status,image_validation_warnings,status,publish_attempts,supplier_products(supplier_sku,currency,brand)"
     )
     .eq("id", draftId)
     .eq("user_id", userId)
@@ -355,7 +362,7 @@ function validateDraftForPublish(draft: ListingDraftRow) {
     );
   }
 
-  if (!draft.ebay_category_id && !process.env.EBAY_SANDBOX_FALLBACK_CATEGORY_ID) {
+  if (!draft.ebay_category_id) {
     throw new EbayIntegrationError(
       "Missing eBay category ID.",
       "INVALID_CATEGORY",

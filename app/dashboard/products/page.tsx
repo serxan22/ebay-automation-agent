@@ -7,7 +7,7 @@ import type { AutomationSettings, ProductAnalysis, Supplier, SupplierProduct } f
 export const dynamic = "force-dynamic";
 
 export default async function ProductsPage() {
-  const { products, analyses } = await loadProductDashboardData();
+  const { products, analyses, stats } = await loadProductDashboardData();
 
   return (
     <div className="space-y-6">
@@ -17,6 +17,13 @@ export default async function ProductsPage() {
           Profit, shipping, image, stock, and compliance scoring before any listing action.
         </p>
       </div>
+      <div className="grid gap-3 md:grid-cols-5">
+        <Stat label="Imported" value={stats.imported} />
+        <Stat label="Analyzed" value={stats.analyzed} />
+        <Stat label="Rejected" value={stats.rejected} />
+        <Stat label="Approved" value={stats.approved} />
+        <Stat label="Drafted" value={stats.drafted} />
+      </div>
       <ProductTable products={products} analyses={analyses} />
     </div>
   );
@@ -24,7 +31,7 @@ export default async function ProductsPage() {
 
 async function loadProductDashboardData() {
   if (!hasSupabaseServerEnv()) {
-    return { products: demoProducts, analyses: demoAnalyses };
+    return { products: demoProducts, analyses: demoAnalyses, stats: buildProductStats(demoProducts.length, demoAnalyses, 0) };
   }
 
   const supabase = createSupabaseServerClient();
@@ -33,10 +40,10 @@ async function loadProductDashboardData() {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return { products: demoProducts, analyses: demoAnalyses };
+    return { products: demoProducts, analyses: demoAnalyses, stats: buildProductStats(demoProducts.length, demoAnalyses, 0) };
   }
 
-  const [productsResponse, suppliersResponse, settingsResponse] = await Promise.all([
+  const [productsResponse, suppliersResponse, settingsResponse, draftsResponse] = await Promise.all([
     supabase
       .from("supplier_products")
       .select("*")
@@ -44,17 +51,18 @@ async function loadProductDashboardData() {
       .order("created_at", { ascending: false })
       .limit(200),
     supabase.from("suppliers").select("*").eq("user_id", user.id),
-    supabase.from("automation_settings").select("*").eq("user_id", user.id).maybeSingle()
+    supabase.from("automation_settings").select("*").eq("user_id", user.id).maybeSingle(),
+    supabase.from("listing_drafts").select("supplier_product_id").eq("user_id", user.id).limit(1000)
   ]);
 
-  if (productsResponse.error || suppliersResponse.error || settingsResponse.error) {
-    return { products: demoProducts, analyses: demoAnalyses };
+  if (productsResponse.error || suppliersResponse.error || settingsResponse.error || draftsResponse.error) {
+    return { products: demoProducts, analyses: demoAnalyses, stats: buildProductStats(demoProducts.length, demoAnalyses, 0) };
   }
 
   const products = ((productsResponse.data ?? []) as Array<Record<string, any>>).map(mapSupplierProduct);
 
   if (!products.length) {
-    return { products: demoProducts, analyses: demoAnalyses };
+    return { products: demoProducts, analyses: demoAnalyses, stats: buildProductStats(demoProducts.length, demoAnalyses, 0) };
   }
 
   const suppliers = ((suppliersResponse.data ?? []) as Array<Record<string, any>>).map(mapSupplier);
@@ -92,7 +100,28 @@ async function loadProductDashboardData() {
     });
   });
 
-  return { products, analyses };
+  const draftedProductIds = new Set((draftsResponse.data ?? []).map((row) => row.supplier_product_id).filter(Boolean));
+
+  return { products, analyses, stats: buildProductStats(products.length, Array.from(latestAnalyses.values()), draftedProductIds.size) };
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-white p-3 text-sm shadow-soft dark:bg-white/[0.04]">
+      <p className="text-xs font-medium uppercase text-ink-400 dark:text-ink-500">{label}</p>
+      <p className="mt-1 font-semibold text-ink-950 dark:text-white">{value}</p>
+    </div>
+  );
+}
+
+function buildProductStats(imported: number, analyses: ProductAnalysis[], drafted: number) {
+  return {
+    imported,
+    analyzed: analyses.length,
+    rejected: analyses.filter((analysis) => !analysis.approvedForListing).length,
+    approved: analyses.filter((analysis) => analysis.approvedForListing).length,
+    drafted
+  };
 }
 
 function mapSupplierProduct(row: Record<string, any>): SupplierProduct {

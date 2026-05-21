@@ -7,12 +7,19 @@ export interface ListingReadinessDraft {
   ebay_title?: string | null;
   ebay_description?: string | null;
   ebay_category_id?: string | null;
+  ebay_category_name?: string | null;
+  ebay_category_path?: string | null;
+  category_tree_id?: string | null;
   item_specifics?: unknown;
+  required_item_specifics?: string[] | null;
+  missing_item_specifics?: string[] | null;
   condition?: string | null;
   quantity?: number | string | null;
   price?: number | string | null;
   supplier_sku?: string | null;
   optimized_image_urls?: string[] | null;
+  image_validation_status?: string | null;
+  image_validation_warnings?: string[] | null;
 }
 
 export interface ListingReadinessResult {
@@ -38,7 +45,6 @@ export async function validateListingReadiness({
   const price = Number(draft.price ?? 0);
   const quantity = Number(draft.quantity ?? 0);
   const imageUrls = Array.isArray(draft.optimized_image_urls) ? draft.optimized_image_urls.filter(Boolean) : [];
-  const fallbackCategoryId = process.env.EBAY_SANDBOX_FALLBACK_CATEGORY_ID?.trim();
   const sandboxPolicyFallbackAllowed =
     process.env.EBAY_ENVIRONMENT !== "production" && process.env.ALLOW_SANDBOX_POLICY_FALLBACK === "true";
   const skuSource = draft.supplier_sku?.trim() || draft.id?.trim() || "";
@@ -72,16 +78,42 @@ export async function validateListingReadiness({
     warnings.push("Supplier SKU is missing; the draft ID will be used as the sandbox SKU.");
   }
 
-  if (!draft.ebay_category_id?.trim() && !fallbackCategoryId) {
+  if (!draft.ebay_category_id?.trim()) {
     missing.push("eBay category ID");
+  }
+
+  if (draft.ebay_category_id?.trim() && !draft.category_tree_id?.trim()) {
+    warnings.push("Category tree ID is missing; item specifics generation will fetch the default EBAY_US tree.");
   }
 
   if (!isValidSandboxCondition(draft.condition)) {
     missing.push("valid eBay condition");
   }
 
-  if (!isPlainRecord(draft.item_specifics) || Object.keys(draft.item_specifics).length === 0) {
+  const itemSpecifics = isPlainRecord(draft.item_specifics) ? draft.item_specifics : {};
+  if (Object.keys(itemSpecifics).length === 0) {
     missing.push("item specifics JSON");
+  }
+
+  const missingRequiredAspects = Array.isArray(draft.missing_item_specifics)
+    ? draft.missing_item_specifics.filter((item) => item.trim().length > 0)
+    : [];
+
+  for (const aspect of missingRequiredAspects) {
+    missing.push(`required item specific: ${aspect}`);
+  }
+
+  const requiredAspects = Array.isArray(draft.required_item_specifics)
+    ? draft.required_item_specifics.filter((item) => item.trim().length > 0)
+    : [];
+  for (const aspect of requiredAspects) {
+    if (!hasSpecificValue(itemSpecifics[aspect])) {
+      missing.push(`required item specific: ${aspect}`);
+    }
+  }
+
+  if (draft.ebay_category_id?.trim() && requiredAspects.length === 0 && missingRequiredAspects.length === 0) {
+    warnings.push("Required item specifics have not been checked for this category yet.");
   }
 
   if (imageUrls.length === 0) {
@@ -106,6 +138,20 @@ export async function validateListingReadiness({
         }
       }
     }
+  }
+
+  if (draft.image_validation_status === "missing") {
+    missing.push("at least one image URL");
+  } else if (draft.image_validation_status === "invalid") {
+    missing.push("valid image");
+  } else if (draft.image_validation_status === "external") {
+    warnings.push("External image URLs are being used; optimize to Supabase Storage when configured.");
+  } else if (!draft.image_validation_status) {
+    warnings.push("Images have not been validated yet.");
+  }
+
+  if (Array.isArray(draft.image_validation_warnings)) {
+    warnings.push(...draft.image_validation_warnings.filter(Boolean).slice(0, 3));
   }
 
   if (!account || account.status !== "connected") {
@@ -147,6 +193,8 @@ export async function validateListingReadiness({
     warnings.push("Supabase Storage uploads are unavailable without SUPABASE_SERVICE_ROLE_KEY; original image URLs will be used.");
   }
 
+  warnings.push("Production publishing is locked; sandbox publishing only.");
+
   const uniqueMissing = Array.from(new Set(missing));
   const uniqueWarnings = Array.from(new Set(warnings));
   const score = Math.max(0, Math.min(100, 100 - uniqueMissing.length * 12 - uniqueWarnings.length * 4));
@@ -173,6 +221,14 @@ function isValidHttpUrl(value: string) {
   } catch {
     return false;
   }
+}
+
+function hasSpecificValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.some((item) => typeof item === "string" && item.trim().length > 0);
+  }
+
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function isValidSandboxCondition(value?: string | null) {

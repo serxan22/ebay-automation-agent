@@ -9,6 +9,7 @@ Rules:
 - Use only product facts supplied by the user.
 - If data is missing, use safe generic wording.
 - Generate natural keyword-rich titles, not keyword stuffing.
+- Include a listingQualityScore from 0 to 100 based on sales clarity, factual completeness, and policy safety.
 - Generate clean professional HTML with:
   - a short factual intro,
   - bullet points,

@@ -2,10 +2,14 @@ import { SupplierCard } from "@/components/suppliers/SupplierCard";
 import { SupplierCsvImporter } from "@/components/suppliers/SupplierCsvImporter";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { demoSuppliers } from "@/lib/demo-data";
+import { createSupabaseServerClient, hasSupabaseServerEnv } from "@/lib/supabase/server";
+import type { Supplier } from "@/lib/types";
 
 const connectors = ["Doba", "Wholesale2B", "Inventory Source", "Syncee", "Custom API"];
 
-export default function SuppliersPage() {
+export default async function SuppliersPage() {
+  const { suppliers, statsBySupplier } = await loadSuppliersDashboardData();
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -21,8 +25,13 @@ export default function SuppliersPage() {
       <SupplierCsvImporter />
 
       <section className="grid gap-4 xl:grid-cols-3">
-        {demoSuppliers.map((supplier) => (
-          <SupplierCard key={supplier.id} supplier={supplier} />
+        {suppliers.map((supplier) => (
+          <SupplierCard
+            key={supplier.id}
+            supplier={supplier}
+            productCount={statsBySupplier.get(supplier.id)?.count ?? 0}
+            latestImportedAt={statsBySupplier.get(supplier.id)?.latestImportedAt ?? null}
+          />
         ))}
       </section>
 
@@ -39,4 +48,70 @@ export default function SuppliersPage() {
       </section>
     </div>
   );
+}
+
+async function loadSuppliersDashboardData() {
+  if (!hasSupabaseServerEnv()) {
+    return { suppliers: demoSuppliers, statsBySupplier: new Map<string, SupplierStats>() };
+  }
+
+  const supabase = createSupabaseServerClient();
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { suppliers: demoSuppliers, statsBySupplier: new Map<string, SupplierStats>() };
+  }
+
+  const [suppliersResponse, productsResponse] = await Promise.all([
+    supabase.from("suppliers").select("*").eq("user_id", user.id).order("updated_at", { ascending: false }),
+    supabase.from("supplier_products").select("supplier_id,created_at").eq("user_id", user.id).limit(2000)
+  ]);
+
+  if (suppliersResponse.error || productsResponse.error) {
+    return { suppliers: demoSuppliers, statsBySupplier: new Map<string, SupplierStats>() };
+  }
+
+  const suppliers = ((suppliersResponse.data ?? []) as Array<Record<string, any>>).map(mapSupplier);
+  const statsBySupplier = new Map<string, SupplierStats>();
+
+  for (const row of (productsResponse.data ?? []) as Array<Record<string, any>>) {
+    const supplierId = row.supplier_id as string;
+    const current = statsBySupplier.get(supplierId) ?? { count: 0, latestImportedAt: null };
+    const createdAt = row.created_at as string | null;
+
+    statsBySupplier.set(supplierId, {
+      count: current.count + 1,
+      latestImportedAt:
+        createdAt && (!current.latestImportedAt || new Date(createdAt) > new Date(current.latestImportedAt))
+          ? createdAt
+          : current.latestImportedAt
+    });
+  }
+
+  return {
+    suppliers: suppliers.length ? suppliers : demoSuppliers,
+    statsBySupplier
+  };
+}
+
+interface SupplierStats {
+  count: number;
+  latestImportedAt: string | null;
+}
+
+function mapSupplier(row: Record<string, any>): Supplier {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    type: row.type,
+    baseUrl: row.base_url,
+    status: row.status,
+    country: row.country,
+    defaultShippingDays: Number(row.default_shipping_days ?? 5),
+    allowsDropshipping: Boolean(row.allows_dropshipping),
+    notes: row.notes
+  };
 }

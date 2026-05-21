@@ -96,7 +96,7 @@ export async function getSystemHealth({
       .eq("approved_for_listing", true),
     supabase
       .from("listing_drafts")
-      .select("id,status,ebay_title,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,supplier_products(supplier_sku)")
+      .select("id,status,ebay_title,ebay_description,ebay_category_id,category_tree_id,item_specifics,required_item_specifics,missing_item_specifics,condition,quantity,price,optimized_image_urls,image_validation_status,image_validation_warnings,supplier_products(supplier_sku)")
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
       .limit(250),
@@ -155,6 +155,7 @@ export async function getSystemHealth({
       )
   );
   const publishReadyDrafts = publishReadyResults.filter((result) => result.canPublishSandbox).length;
+  const firstReadinessBlocker = publishReadyResults.find((result) => !result.canPublishSandbox)?.missing.slice(0, 4).join(", ");
   const listingDrafts = draftRowsData.length;
   const approvedDrafts = draftRowsData.filter((draft) => draft.status === "approved").length;
 
@@ -174,7 +175,9 @@ export async function getSystemHealth({
     nextAction: publishReadyDrafts
       ? "Publish ready drafts to sandbox."
       : approvedDrafts
-        ? "Fix readiness issues shown on Listings."
+        ? firstReadinessBlocker
+          ? `Fix readiness: ${firstReadinessBlocker}.`
+          : "Fix readiness issues shown on Listings."
         : "Analyze products and create/approve listing drafts."
   });
 
@@ -311,8 +314,10 @@ function buildSummary({
     lastEbayError,
     lastBlockingIssue: blocker?.message ?? null,
     publishReadiness:
-      status === "ready"
-        ? "Sandbox publish prerequisites are ready. Production publish remains locked."
+      counts.publishReadyDrafts > 0
+        ? "Sandbox publishing ready."
+        : status === "ready"
+          ? "Sandbox publish prerequisites are ready. Production publish remains locked."
         : "Sandbox publish is blocked until missing requirements are fixed.",
     nextAction: next?.nextAction ?? "System is ready for sandbox automation.",
     suggestedNextAction: next?.nextAction ?? "System is ready for sandbox automation."

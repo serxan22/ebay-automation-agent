@@ -1,4 +1,5 @@
 import { ListingDraftCard } from "@/components/listings/ListingDraftCard";
+import { BulkListingActions } from "@/components/listings/BulkListingActions";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { EbayErrorGuide } from "@/components/ebay/EbayErrorGuide";
 import { getEbayAccount } from "@/lib/ebay/account";
@@ -41,6 +42,8 @@ async function ListingsContent({
           <StatusBadge status={`Failed ${failedCount}`} tone={failedCount ? "danger" : "success"} />
         </div>
       </div>
+
+      <BulkListingActions />
 
       <section className="grid gap-4 xl:grid-cols-2">
         {drafts.length ? (
@@ -97,7 +100,7 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
     supabase
       .from("listing_drafts")
       .select(
-        "id,user_id,supplier_product_id,analysis_id,ebay_title,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,status,ai_generated,error_message,ebay_error_code,ebay_offer_id,ebay_item_id,ebay_sku,publish_attempts,last_publish_attempt_at,published_at,supplier_products(title,supplier_sku),product_analysis(estimated_profit,margin_percentage,risk_score,final_score,ai_notes,rejection_reasons)"
+        "id,user_id,supplier_product_id,analysis_id,ebay_title,ebay_description,ebay_category_id,ebay_category_name,ebay_category_path,category_tree_id,category_confidence,item_specifics,required_item_specifics,missing_item_specifics,condition,quantity,price,optimized_image_urls,image_validation_status,image_validation_warnings,listing_quality_score,status,ai_generated,error_message,ebay_error_code,ebay_error_json,ebay_offer_id,ebay_item_id,ebay_sku,publish_attempts,last_publish_attempt_at,published_at,supplier_products(title,supplier_sku,supplier_price,shipping_cost),product_analysis(estimated_ebay_fees,estimated_total_cost,estimated_profit,margin_percentage,risk_score,final_score,ai_notes,rejection_reasons)"
       )
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
@@ -120,12 +123,19 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
         ebay_title: row.ebay_title,
         ebay_description: row.ebay_description,
         ebay_category_id: row.ebay_category_id,
+        ebay_category_name: row.ebay_category_name,
+        ebay_category_path: row.ebay_category_path,
+        category_tree_id: row.category_tree_id,
         item_specifics: row.item_specifics,
+        required_item_specifics: row.required_item_specifics,
+        missing_item_specifics: row.missing_item_specifics,
         condition: row.condition,
         quantity: row.quantity,
         price: row.price,
         supplier_sku: supplierProduct?.supplier_sku,
-        optimized_image_urls: row.optimized_image_urls
+        optimized_image_urls: row.optimized_image_urls,
+        image_validation_status: row.image_validation_status,
+        image_validation_warnings: row.image_validation_warnings
       },
       account
     });
@@ -137,17 +147,30 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
       analysisId: row.analysis_id as string | null,
       supplierProductTitle: supplierProduct?.title ?? null,
       supplierSku: supplierProduct?.supplier_sku ?? null,
+      supplierCost: supplierProduct?.supplier_price == null ? null : Number(supplierProduct.supplier_price),
+      supplierShippingCost: supplierProduct?.shipping_cost == null ? null : Number(supplierProduct.shipping_cost),
       ebayTitle: row.ebay_title as string,
       ebayDescription: row.ebay_description as string,
       ebayCategoryId: row.ebay_category_id as string | null,
+      ebayCategoryName: row.ebay_category_name as string | null,
+      ebayCategoryPath: row.ebay_category_path as string | null,
+      categoryTreeId: row.category_tree_id as string | null,
+      categoryConfidence: row.category_confidence == null ? null : Number(row.category_confidence),
       itemSpecifics: (row.item_specifics ?? {}) as Record<string, string | string[]>,
+      requiredItemSpecifics: Array.isArray(row.required_item_specifics) ? row.required_item_specifics : [],
+      missingItemSpecifics: Array.isArray(row.missing_item_specifics) ? row.missing_item_specifics : [],
       condition: row.condition as string,
       quantity: Number(row.quantity),
       price: Number(row.price),
       optimizedImageUrls: (row.optimized_image_urls ?? []) as string[],
+      imageValidationStatus: row.image_validation_status as string | null,
+      imageValidationWarnings: Array.isArray(row.image_validation_warnings) ? row.image_validation_warnings : [],
+      listingQualityScore: row.listing_quality_score == null ? null : Number(row.listing_quality_score),
       status: row.status as ListingDraft["status"],
       aiGenerated: Boolean(row.ai_generated),
       estimatedProfit: analysis?.estimated_profit == null ? null : Number(analysis.estimated_profit),
+      estimatedEbayFees: analysis?.estimated_ebay_fees == null ? null : Number(analysis.estimated_ebay_fees),
+      estimatedTotalCost: analysis?.estimated_total_cost == null ? null : Number(analysis.estimated_total_cost),
       marginPercentage: analysis?.margin_percentage == null ? null : Number(analysis.margin_percentage),
       riskScore: analysis?.risk_score == null ? null : Number(analysis.risk_score),
       finalScore: analysis?.final_score == null ? null : Number(analysis.final_score),
@@ -155,6 +178,7 @@ async function loadListingsDashboardData(): Promise<{ drafts: ListingDraft[]; eb
       rejectionReasons: Array.isArray(analysis?.rejection_reasons) ? analysis.rejection_reasons : [],
       errorMessage: row.error_message as string | null,
       ebayErrorCode: row.ebay_error_code as string | null,
+      ebayErrorJson: row.ebay_error_json ?? null,
       ebayOfferId: row.ebay_offer_id as string | null,
       ebayItemId: row.ebay_item_id as string | null,
       ebaySku: row.ebay_sku as string | null,

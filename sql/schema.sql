@@ -1,6 +1,6 @@
 create extension if not exists "pgcrypto";
 
-create type approval_mode as enum ('manual', 'trusted_auto', 'full_auto');
+create type approval_mode as enum ('manual', 'trusted_auto', 'full_auto', 'full_auto_sandbox_only');
 create type supplier_type as enum ('csv', 'api', 'manual', 'doba', 'wholesale2b', 'inventorysource', 'syncee', 'custom');
 create type supplier_status as enum ('active', 'inactive', 'needs_attention');
 create type draft_status as enum ('draft', 'approved', 'rejected', 'published', 'failed');
@@ -140,11 +140,20 @@ create table if not exists public.listing_drafts (
   ebay_title text not null,
   ebay_description text not null,
   ebay_category_id text,
+  ebay_category_name text,
+  ebay_category_path text,
+  category_tree_id text,
+  category_confidence numeric(4, 2),
   item_specifics jsonb not null default '{}',
+  required_item_specifics text[] not null default '{}',
+  missing_item_specifics text[] not null default '{}',
   condition text not null default 'NEW',
   quantity integer not null default 1 check (quantity > 0),
   price numeric(12, 2) not null check (price >= 0),
   optimized_image_urls text[] not null default '{}',
+  image_validation_status text,
+  image_validation_warnings text[] not null default '{}',
+  listing_quality_score integer check (listing_quality_score between 0 and 100),
   status draft_status not null default 'draft',
   ai_generated boolean not null default true,
   ebay_offer_id text,

@@ -52,7 +52,7 @@ Required for eBay sandbox:
 - `EBAY_REDIRECT_URI`
 - `EBAY_ENVIRONMENT=sandbox`
 - `EBAY_MARKETPLACE_ID=EBAY_US`
-- `EBAY_SANDBOX_FALLBACK_CATEGORY_ID` optional sandbox-only fallback category
+- `EBAY_TAXONOMY_API_HOST=production` optional, recommended for category lookup only because eBay sandbox category suggestions are unreliable
 - `ALLOW_SANDBOX_POLICY_FALLBACK=false` by default; set `true` only for sandbox diagnostics when fulfillment policy creation is broken
 
 Use `EBAY_RUNAME` for the eBay Developer portal Redirect URL name/RuName. Keep `EBAY_REDIRECT_URI` as the real application callback URL, for example `https://your-ngrok-url/market/callback`.
@@ -88,8 +88,9 @@ Required for AI providers:
 1. Create a Supabase project.
 2. Run `sql/schema.sql` in the SQL editor.
 3. Run `sql/policies.sql`.
-4. Optionally adapt and run `sql/seed.sql`.
-5. Create a public or signed Supabase Storage bucket named `product-images`.
+4. For existing installs, run each phase migration through `sql/phase6_listing_taxonomy.sql`.
+5. Optionally adapt and run `sql/seed.sql`.
+6. Create a public or signed Supabase Storage bucket named `product-images`.
 
 Every user-owned table has RLS enabled so users can only access rows where `auth.uid() = user_id`.
 
@@ -159,6 +160,30 @@ Phase 1 creates manual-review listing drafts only. The AI listing generator:
 - Produces clean HTML with bullet points, key features, package-includes text, shipping note, return note, listing quality/readiness score, and missing-fields report
 - Supports `Regenerate listing copy` from Listings and `draftı premium et` / `title SEO üçün düzəlt` from Telegram
 - Validates image URLs before publish; if Supabase Storage is configured, optimized copies can be uploaded to the `product-images` bucket, otherwise external URLs are kept with a warning
+- Resolves missing eBay category IDs through the Taxonomy API and stores category ID, name, path, tree ID, and confidence.
+- Generates required item specifics/aspects from category metadata and blocks publish with exact missing aspect names.
+
+### Category Resolution and Item Specifics
+
+Routes:
+
+```text
+POST /api/ebay/taxonomy/suggest-category
+POST /api/listings/[draftId]/resolve-category
+POST /api/listings/resolve-categories
+POST /api/listings/[draftId]/generate-item-specifics
+POST /api/listings/generate-missing-specifics
+```
+
+Category lookup uses `getDefaultCategoryTreeId`, `getCategorySuggestions`, and `getItemAspectsForCategory` from eBay Taxonomy. The lookup defaults to `https://api.ebay.com` for Taxonomy only because sandbox category suggestions can return boilerplate data. Inventory item, offer creation, and publish calls remain sandbox-only.
+
+If category lookup cannot find a confident suggestion, the app does not fake a category. Listings shows:
+
+```text
+Could not auto-resolve eBay category. Enter category ID manually or retry.
+```
+
+Use the draft `Revise` modal to manually enter category ID, category name/path, and item specifics JSON if needed.
 
 ## eBay Sandbox
 
@@ -264,6 +289,11 @@ POST /api/ebay/policies/retry-fulfillment-step
 POST /api/ebay/policies/fulfillment-docs-test
 POST /api/ebay/policies/fulfillment-long-test
 POST /api/ebay/location
+POST /api/ebay/taxonomy/suggest-category
+POST /api/listings/[draftId]/resolve-category
+POST /api/listings/resolve-categories
+POST /api/listings/[draftId]/generate-item-specifics
+POST /api/listings/generate-missing-specifics
 ```
 
 `GET /api/ebay/programs` calls `get_opted_in_programs` and reports whether `SELLING_POLICY_MANAGEMENT` is active. `POST /api/ebay/programs/opt-in-selling-policies` calls `program/opt_in` with `{ "programType": "SELLING_POLICY_MANAGEMENT" }`. eBay can take time to activate program opt-in, so wait and check again before retrying policy sync.
@@ -340,8 +370,9 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 - `Creating...` stuck in Settings: the browser action should time out after 25 seconds and show `Request timed out. Check Vercel logs or try again.` Retry with `Retry next fulfillment attempt`, then check `/api/ebay/policies/debug` for bounded attempt details. If eBay times out server-side, the UI should show `eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details.`
 - Invalid shipping service code: sandbox rejected the fulfillment policy shipping service. The app discovers valid EBAY_US services first, then tries official-style free shipping and boolean zero-cost schemas while keeping any payment/return policies already created.
 - Missing inventory location: click `Setup location` in Settings.
-- Invalid category/aspects: revise the draft category ID and item specifics JSON.
-- Image error: use publicly accessible HTTP/HTTPS image URLs; HTTPS is recommended.
+- Missing category: click `Resolve category`, run Telegram `categoryləri tap`, or enter category ID manually in `Revise`.
+- Invalid category/aspects: click `Generate item specifics`; if required aspects remain missing, revise item specifics JSON with the exact aspect names shown.
+- Image error: click `Validate images` or `Optimize images`; use publicly accessible HTTP/HTTPS image URLs, HTTPS is recommended.
 - Draft not ready: Listings shows exact missing fields such as title length, description, price, quantity, SKU, category, item specifics, image URL, policies, token, or inventory location.
 - Publish blocked: production is locked; sandbox createOffer and publishOffer are blocked until payment, return, fulfillment, inventory location, approval, title, description, price, quantity, SKU, category, item specifics, and image checks are ready.
 
@@ -368,7 +399,7 @@ Manual sandbox setup is a last resort only if shipping-service discovery also fa
 ### Operating Runbook
 
 1. Deploy Vercel with the environment variables above.
-2. Run Supabase migrations from `sql/schema.sql`, `sql/phase2_ebay_sandbox.sql`, `sql/phase3_telegram_bot.sql`, `sql/phase4_ebay_oauth_states.sql`, and `sql/phase5_safe_defaults.sql`.
+2. Run Supabase migrations from `sql/schema.sql`, `sql/phase2_ebay_sandbox.sql`, `sql/phase3_telegram_bot.sql`, `sql/phase4_ebay_oauth_states.sql`, `sql/phase5_safe_defaults.sql`, and `sql/phase6_listing_taxonomy.sql`.
 3. Open `/dashboard` and review System health.
 4. Open `/dashboard/settings`, connect sandbox, and confirm refresh token is stored.
 5. Enable seller policies if Business Policies are inactive.
@@ -379,8 +410,8 @@ Manual sandbox setup is a last resort only if shipping-service discovery also fa
 10. Click `Setup location`.
 11. Import supplier products from `/dashboard/suppliers`.
 12. Use Telegram or `/dashboard/products` to analyze products.
-13. Create listing drafts, improve listing copy/images, and approve safe drafts.
-14. Publish sandbox only from `/dashboard/listings` or Telegram when fulfillment policy is stored.
+13. Create listing drafts, improve listing copy/images, resolve missing categories, generate item specifics, and approve safe drafts.
+14. Publish sandbox only from `/dashboard/listings` or Telegram when fulfillment policy, category, specifics, image, policy, location, and approval readiness are complete.
 15. Use `/api/system/health`, `/api/ebay/policies/debug`, `/api/ebay/shipping-services`, and `/api/ebay/status` for diagnostics.
 
 ## Telegram Bot
@@ -476,6 +507,8 @@ The `/dashboard/telegram` page shows `AI active` when Groq, OpenAI, or Anthropic
 - `OPTIMIZE_IMAGES`
 - `DISCOVER_SHIPPING_SERVICES`
 - `RUN_FULFILLMENT_DOCS_TEST`
+- `RESOLVE_CATEGORIES`
+- `GENERATE_ITEM_SPECIFICS`
 - `RETRY_FULFILLMENT_STEP`
 - `SYNC_EBAY_POLICIES`
 - `CREATE_DEFAULT_EBAY_POLICIES`
@@ -507,6 +540,9 @@ Example messages:
 - `fulfillment niyə alınmır?`
 - `docs fulfillment test elə`
 - `shipping services discover et`
+- `categoryləri tap`
+- `missing categoryləri düzəlt`
+- `item specifics hazırla`
 - `descriptionu daha cəlbedici et`
 - `şəkilləri hazırla`
 - `electronics kateqoriyasını blokla`
@@ -516,13 +552,16 @@ Example messages:
 - `nə problem var sistemdə?`
 - `mənə insan kimi izah et`
 
+For `10 dənə məhsul tap bu supplierdan və 20 faiz profitlə listing hazırla`, Telegram parses quantity and margin, selects safe in-stock products, analyzes profit/risk, creates premium listing drafts, resolves eBay categories, generates item specifics, validates/optimizes images, and then stops for manual approval unless `trusted_auto` or `full_auto_sandbox_only` is enabled. If anything blocks publish, the reply includes the exact missing field, such as category ID, required item specific, image, fulfillment policy, or inventory location.
+
 Every connected Telegram request is saved to `agent_tasks` with the parsed intent JSON. Bot responses, parser fallback warnings, and errors are saved to `automation_logs`. Sandbox draft publishing stays sandbox-only through the Phase 2 eBay service; requests for production/live eBay publishing are refused with a safety explanation.
 
 ## Automation Modes
 
 - `manual`: default; drafts are held for approval
 - `trusted_auto`: high-score safe drafts can be auto-approved and published to sandbox only when all readiness checks, including real fulfillment policy, are complete
-- `full_auto`: future mode, still blocked by risk and daily limits
+- `full_auto_sandbox_only`: high-score safe drafts can be auto-approved and published to sandbox only after every readiness check passes
+- `full_auto`: legacy/future production-capable value; Telegram refuses to enable it
 
 New seller safe mode defaults:
 

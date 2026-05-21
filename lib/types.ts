@@ -1,4 +1,4 @@
-export type ApprovalMode = "manual" | "trusted_auto" | "full_auto";
+export type ApprovalMode = "manual" | "trusted_auto" | "full_auto" | "full_auto_sandbox_only";
 export type RiskTolerance = "conservative" | "balanced" | "aggressive";
 export type SupplierType =
   | "csv"
@@ -115,6 +115,7 @@ export interface ListingGenerationResult {
   shippingNote: string;
   returnNote: string;
   conditionNote: string;
+  listingQualityScore?: number;
   warnings: string[];
 }
 
@@ -125,17 +126,30 @@ export interface ListingDraft {
   analysisId?: string | null;
   supplierProductTitle?: string | null;
   supplierSku?: string | null;
+  supplierCost?: number | null;
+  supplierShippingCost?: number | null;
   ebayTitle: string;
   ebayDescription: string;
   ebayCategoryId?: string | null;
+  ebayCategoryName?: string | null;
+  ebayCategoryPath?: string | null;
+  categoryTreeId?: string | null;
+  categoryConfidence?: number | null;
   itemSpecifics: Record<string, string | string[]>;
+  requiredItemSpecifics?: string[];
+  missingItemSpecifics?: string[];
   condition: string;
   quantity: number;
   price: number;
   optimizedImageUrls: string[];
+  imageValidationStatus?: string | null;
+  imageValidationWarnings?: string[];
+  listingQualityScore?: number | null;
   status: ListingDraftStatus;
   aiGenerated: boolean;
   estimatedProfit?: number | null;
+  estimatedEbayFees?: number | null;
+  estimatedTotalCost?: number | null;
   marginPercentage?: number | null;
   riskScore?: number | null;
   finalScore?: number | null;
@@ -146,6 +160,7 @@ export interface ListingDraft {
   ebaySku?: string | null;
   errorMessage?: string | null;
   ebayErrorCode?: string | null;
+  ebayErrorJson?: unknown;
   publishAttempts?: number;
   lastPublishAttemptAt?: string | null;
   publishedAt?: string | null;

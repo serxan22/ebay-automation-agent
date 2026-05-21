@@ -32,7 +32,7 @@ const automationSettingsSchema = z.object({
   maxShippingDays: z.number().int(),
   minStockQuantity: z.number().int(),
   autoListingEnabled: z.boolean(),
-  approvalMode: z.enum(["manual", "trusted_auto", "full_auto"]),
+  approvalMode: z.enum(["manual", "trusted_auto", "full_auto", "full_auto_sandbox_only"]),
   riskTolerance: z.number().min(0).max(100),
   defaultQuantity: z.number().int(),
   pricingBufferPercentage: z.number(),

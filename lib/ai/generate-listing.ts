@@ -13,6 +13,7 @@ const ListingGenerationSchema = z.object({
   shippingNote: z.string(),
   returnNote: z.string(),
   conditionNote: z.string(),
+  listingQualityScore: z.number().int().min(0).max(100).optional(),
   warnings: z.array(z.string()).default([])
 });
 
@@ -54,6 +55,7 @@ export async function generateListing({
               shippingNote: "Do not exaggerate delivery speed",
               returnNote: "Generic return note",
               conditionNote: "New only if supplier data supports it",
+              listingQualityScore: "0-100 based on title clarity, description completeness, item specifics, images",
               warnings: ["missing data or compliance warnings"]
             }
           })
@@ -116,8 +118,31 @@ function createFallbackListing(
     shippingNote: `Estimated handling and shipping time is based on the supplier feed: ${product.shippingDays} days.`,
     returnNote: "Returns follow the seller's active eBay return policy.",
     conditionNote: "New item; confirm final condition against supplier data before publishing.",
+    listingQualityScore: estimateListingQuality({ title, description: escapedDescription, bullets: bulletPoints, itemSpecifics }),
     warnings: analysis?.rejectionReasons ?? []
   };
+}
+
+function estimateListingQuality({
+  title,
+  description,
+  bullets,
+  itemSpecifics
+}: {
+  title: string;
+  description: string;
+  bullets: string[];
+  itemSpecifics: Record<string, string>;
+}) {
+  let score = 45;
+
+  if (title.length >= 35 && title.length <= 80) score += 15;
+  if (description.length >= 120) score += 15;
+  if (bullets.length >= 4) score += 10;
+  if (Object.keys(itemSpecifics).length >= 3) score += 10;
+  if (itemSpecifics.Brand || itemSpecifics.Type) score += 5;
+
+  return Math.max(0, Math.min(100, score));
 }
 
 function buildSafeTitle(product: SupplierProduct) {

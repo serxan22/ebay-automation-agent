@@ -13,6 +13,8 @@ import { discoverShippingServicesWithFallback, getPreferredDomesticShippingServi
 import { getConfiguredAiProvider } from "@/lib/ai";
 import { generateListing } from "@/lib/ai/generate-listing";
 import { optimizeProductImages } from "@/lib/images/optimize-product-images";
+import { resolveCategoryForDraft, resolveMissingCategoriesForUser } from "@/lib/listings/category-resolution";
+import { generateItemSpecificsForDraft, generateMissingItemSpecificsForUser } from "@/lib/listings/item-specifics";
 import { validateListingReadiness } from "@/lib/listings/validate-listing-readiness";
 import { analyzeProduct } from "@/lib/products/analyze-product";
 import {
@@ -169,6 +171,10 @@ export async function executeTelegramIntentAction({
       return discoverShippingServicesFromTelegram({ supabase, userId });
     case "RUN_FULFILLMENT_DOCS_TEST":
       return runFulfillmentDocsTestFromTelegram({ supabase, userId });
+    case "RESOLVE_CATEGORIES":
+      return resolveCategoriesFromTelegram({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 10 });
+    case "GENERATE_ITEM_SPECIFICS":
+      return generateItemSpecificsFromTelegram({ supabase, userId, quantity: getNumber(intent.parameters.quantity) ?? 10 });
     case "RETRY_FULFILLMENT_STEP":
       return retryFulfillmentStepFromTelegram({
         supabase,
@@ -430,26 +436,16 @@ async function enableTestMode({ supabase, userId }: ActionContext) {
 
 async function findProducts({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
   const limit = clampBatchQuantity(quantity, 50);
-  const { data, error } = await supabase
-    .from("supplier_products")
-    .select("id,title,category,stock_quantity,shipping_days")
-    .eq("user_id", userId)
-    .gt("stock_quantity", 0)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+  const { products } = await loadProductsForAction({ supabase, userId, limit });
 
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  if (!data?.length) {
+  if (!products.length) {
     return { ok: true, message: "No supplier products found yet. Upload an approved supplier CSV first." };
   }
 
-  const names = data.slice(0, 3).map((item) => item.title).join("; ");
+  const names = products.slice(0, 3).map((item) => item.title).join("; ");
   return {
     ok: true,
-    message: `Found ${data.length} candidate products to analyze. Top candidates: ${names}.`
+    message: `Found ${products.length} safe candidate products to analyze. Top candidates: ${names}.`
   };
 }
 
@@ -539,6 +535,9 @@ async function createListingDrafts({
   let rejected = 0;
   let approved = 0;
   let publishedSandbox = 0;
+  let categoriesResolved = 0;
+  let itemSpecificsComplete = 0;
+  let readyToPublish = 0;
   const rejectionCounts = new Map<string, number>();
   const failures: string[] = [];
   const createdDraftIds: string[] = [];
@@ -597,8 +596,33 @@ async function createListingDrafts({
     }
   }
 
+  for (const draftId of createdDraftIds) {
+    try {
+      const categoryResult = await resolveCategoryForDraft({ supabase, userId, draftId });
+
+      if (categoryResult.ok) {
+        categoriesResolved += 1;
+        const specificsResult = await generateItemSpecificsForDraft({ supabase, userId, draftId });
+
+        if (specificsResult.ok) {
+          itemSpecificsComplete += 1;
+        } else if (specificsResult.missingRequiredAspects.length) {
+          failures.push(`Draft ${draftId} missing specifics: ${specificsResult.missingRequiredAspects.join(", ")}`);
+        }
+      } else {
+        failures.push(categoryResult.message);
+      }
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : "Category/item specifics workflow failed.");
+    }
+  }
+
+  if (createdDraftIds.length) {
+    readyToPublish = await countReadyDrafts({ supabase, userId, draftIds: createdDraftIds });
+  }
+
   let publishBlockReason = "";
-  if (settings.approvalMode === "trusted_auto" && autoApprovedDraftIds.length > 0) {
+  if (isAutoSandboxApprovalMode(settings.approvalMode) && autoApprovedDraftIds.length > 0) {
     const publishResult = await publishTrustedAutoDraftsSandbox({ supabase, userId, draftIds: autoApprovedDraftIds });
     publishedSandbox = publishResult.published;
     publishBlockReason = publishResult.blockedReason ?? "";
@@ -615,6 +639,9 @@ async function createListingDrafts({
       approved,
       rejected,
       draftsCreated,
+      categoriesResolved,
+      itemSpecificsComplete,
+      readyToPublish,
       publishedSandbox,
       publishBlockReason,
       failures
@@ -626,7 +653,7 @@ async function createListingDrafts({
 
   return {
     ok: failures.length === 0 || draftsCreated > 0,
-    message: `${candidates.length} products analyzed: ${approved} approved, ${rejected} rejected. ${draftsCreated} listing drafts created.${
+    message: `${candidates.length} products checked/analyzed: ${approved} accepted, ${rejected} rejected. ${draftsCreated} listing drafts created. ${categoriesResolved} categories resolved. ${itemSpecificsComplete} drafts have complete item specifics. ${readyToPublish} ready to publish.${
       publishedSandbox ? ` ${publishedSandbox} published to sandbox.` : ""
     }${
       settings.approvalMode === "manual" && draftsCreated
@@ -681,6 +708,45 @@ async function publishTrustedAutoDraftsSandbox({
   }
 
   return { published, blockedReason: published ? null : "Trusted auto publish found no fully ready sandbox drafts." };
+}
+
+async function countReadyDrafts({
+  supabase,
+  userId,
+  draftIds
+}: ActionContext & {
+  draftIds: string[];
+}) {
+  if (!draftIds.length) {
+    return 0;
+  }
+
+  const account = await getEbayAccount({ supabase, userId });
+  const { data, error } = await supabase
+    .from("listing_drafts")
+    .select(
+      "id,status,ebay_title,ebay_description,ebay_category_id,category_tree_id,item_specifics,required_item_specifics,missing_item_specifics,condition,quantity,price,optimized_image_urls,image_validation_status,image_validation_warnings,supplier_products(supplier_sku)"
+    )
+    .eq("user_id", userId)
+    .in("id", draftIds);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const readiness = await Promise.all(
+    ((data ?? []) as Array<Record<string, any>>).map((draft) =>
+      validateListingReadiness({
+        draft: {
+          ...draft,
+          supplier_sku: getEmbeddedRow(draft.supplier_products)?.supplier_sku ?? null
+        },
+        account
+      })
+    )
+  );
+
+  return readiness.filter((result) => result.canPublishSandbox).length;
 }
 
 async function analyzeLatestProductsForDrafts({
@@ -862,7 +928,7 @@ async function createDraftFromCandidate({
       analysisId: candidate.analysisId
     });
     const fallbackUsed = generated.warnings.includes("Safe fallback listing content was used.");
-    const draftStatus = settings.approvalMode === "trusted_auto" && candidate.analysis.finalScore >= 70 ? "approved" : draft.status;
+    const draftStatus = isAutoSandboxApprovalMode(settings.approvalMode) && candidate.analysis.finalScore >= 70 ? "approved" : draft.status;
     const { data, error } = await supabase
       .from("listing_drafts")
       .insert({
@@ -872,11 +938,23 @@ async function createDraftFromCandidate({
         ebay_title: draft.ebayTitle,
         ebay_description: draft.ebayDescription,
         ebay_category_id: ebayCategoryId ?? draft.ebayCategoryId,
+        ebay_category_name: draft.ebayCategoryName,
+        ebay_category_path: draft.ebayCategoryPath,
+        category_tree_id: draft.categoryTreeId,
+        category_confidence: draft.categoryConfidence,
         item_specifics: draft.itemSpecifics,
+        required_item_specifics: draft.requiredItemSpecifics,
+        missing_item_specifics: draft.missingItemSpecifics,
         condition: draft.condition,
         quantity: fallbackUsed ? Math.max(1, Math.min(candidate.product.stockQuantity || 1, 1)) : draft.quantity,
         price: draft.price,
         optimized_image_urls: draft.optimizedImageUrls,
+        image_validation_status: isSupabaseImageStorageConfigured() ? "optimized" : "external",
+        image_validation_warnings: [
+          ...imageResult.warnings,
+          ...imageResult.rejected.map((item) => `${item.url}: ${item.reason}`)
+        ],
+        listing_quality_score: generated.listingQualityScore ?? null,
         status: draftStatus,
         ai_generated: draft.aiGenerated
       })
@@ -919,6 +997,10 @@ function isSandboxPolicyFallbackAllowed() {
   return process.env.EBAY_ENVIRONMENT !== "production" && process.env.ALLOW_SANDBOX_POLICY_FALLBACK === "true";
 }
 
+function isAutoSandboxApprovalMode(mode: AutomationSettings["approvalMode"]) {
+  return mode === "trusted_auto" || mode === "full_auto_sandbox_only" || mode === "full_auto";
+}
+
 function validateDraftCandidate(candidate: DraftCandidate) {
   if (candidate.failureReason) {
     return candidate.failureReason;
@@ -930,6 +1012,14 @@ function validateDraftCandidate(candidate: DraftCandidate) {
 
   if (!candidate.analysisId) {
     return "missing analysis_id";
+  }
+
+  if (isRiskyProductText(`${candidate.product.title} ${candidate.product.category ?? ""} ${candidate.product.description ?? ""}`)) {
+    return "restricted or risky product category";
+  }
+
+  if (!candidate.product.imageUrls.length) {
+    return "missing product image";
   }
 
   if (!Number.isFinite(candidate.analysis.recommendedEbayPrice) || candidate.analysis.recommendedEbayPrice <= 0) {
@@ -1243,6 +1333,48 @@ async function runFulfillmentDocsTestFromTelegram({ supabase, userId }: ActionCo
   };
 }
 
+async function resolveCategoriesFromTelegram({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
+  const result = await resolveMissingCategoriesForUser({
+    supabase,
+    userId,
+    limit: Math.min(Math.max(quantity, 1), 20)
+  });
+
+  return {
+    ok: result.resolved > 0 || result.checked === 0,
+    message:
+      result.checked === 0
+        ? "No drafts with missing categories were found."
+        : `Category resolution finished: ${result.resolved}/${result.checked} resolved, ${result.failed} failed.${
+            result.failed
+              ? "\nCould not auto-resolve every eBay category. Enter category ID manually or retry."
+              : ""
+          }`
+  };
+}
+
+async function generateItemSpecificsFromTelegram({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
+  const result = await generateMissingItemSpecificsForUser({
+    supabase,
+    userId,
+    limit: Math.min(Math.max(quantity, 1), 20)
+  });
+  const missing = result.results
+    .flatMap((item) => item.missingRequiredAspects)
+    .filter(Boolean)
+    .slice(0, 8);
+
+  return {
+    ok: result.completed > 0 || result.checked === 0,
+    message:
+      result.checked === 0
+        ? "No category-resolved drafts were found. Run categoryləri tap first."
+        : `Item specifics finished: ${result.completed}/${result.checked} complete, ${result.incomplete} need review.${
+            missing.length ? ` Missing required aspects: ${Array.from(new Set(missing)).join(", ")}.` : ""
+          }`
+  };
+}
+
 async function retryFulfillmentStepFromTelegram({
   supabase,
   userId,
@@ -1414,7 +1546,7 @@ async function setupEbayLocationFromTelegram({ supabase, userId }: ActionContext
 async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
   const { data, error } = await supabase
     .from("listing_drafts")
-    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls")
+    .select("id,ebay_title,status,ebay_description,ebay_category_id,category_tree_id,item_specifics,required_item_specifics,missing_item_specifics,condition,quantity,price,optimized_image_urls,image_validation_status,image_validation_warnings,supplier_products(supplier_sku)")
     .eq("user_id", userId)
     .eq("status", "approved")
     .limit(quantity);
@@ -1440,7 +1572,17 @@ async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionCo
     };
   }
 
-  const readiness = await Promise.all(rows.map((draft) => validateListingReadiness({ draft, account })));
+  const readiness = await Promise.all(
+    rows.map((draft) =>
+      validateListingReadiness({
+        draft: {
+          ...draft,
+          supplier_sku: getEmbeddedRow(draft.supplier_products)?.supplier_sku ?? null
+        },
+        account
+      })
+    )
+  );
   const readyDrafts = rows.filter((_, index) => readiness[index]?.ready);
 
   if (!readyDrafts.length) {
@@ -1479,7 +1621,7 @@ async function showReadyDrafts({ supabase, userId, quantity }: ActionContext & {
   const account = await getEbayAccount({ supabase, userId });
   const { data, error } = await supabase
     .from("listing_drafts")
-    .select("id,ebay_title,status,ebay_description,ebay_category_id,item_specifics,condition,quantity,price,optimized_image_urls,supplier_products(supplier_sku)")
+    .select("id,ebay_title,status,ebay_description,ebay_category_id,category_tree_id,item_specifics,required_item_specifics,missing_item_specifics,condition,quantity,price,optimized_image_urls,image_validation_status,image_validation_warnings,supplier_products(supplier_sku)")
     .eq("user_id", userId)
     .in("status", ["approved", "draft", "failed"])
     .order("updated_at", { ascending: false })
@@ -1547,6 +1689,7 @@ async function improveListingCopyFromTelegram({ supabase, userId, quantity }: Ac
         ebay_title: generated.ebayTitle,
         ebay_description: generated.ebayDescription,
         item_specifics: generated.itemSpecifics,
+        listing_quality_score: generated.listingQualityScore ?? null,
         ai_generated: true,
         error_message: null,
         ebay_error_code: null,
@@ -1619,7 +1762,14 @@ async function optimizeImagesFromTelegram({ supabase, userId, quantity }: Action
     if (result.optimizedUrls.length) {
       const { error: updateError } = await supabase
         .from("listing_drafts")
-        .update({ optimized_image_urls: result.optimizedUrls })
+        .update({
+          optimized_image_urls: result.optimizedUrls,
+          image_validation_status: storeImages ? "optimized" : "external",
+          image_validation_warnings: [
+            ...result.warnings,
+            ...result.rejected.map((item) => `${item.url}: ${item.reason}`)
+          ]
+        })
         .eq("user_id", userId)
         .eq("id", row.id);
 
@@ -1789,16 +1939,16 @@ async function updateBlockedArray({
 }
 
 async function changeApprovalMode({ supabase, userId, value }: ActionContext & { value?: string }) {
-  const allowed = new Set(["manual", "trusted_auto", "full_auto"]);
+  const allowed = new Set(["manual", "trusted_auto", "full_auto", "full_auto_sandbox_only"]);
 
   if (!value || !allowed.has(value)) {
-    return { ok: false, message: "Approval mode must be manual, trusted_auto, or full_auto." };
+    return { ok: false, message: "Approval mode must be manual, trusted_auto, or full_auto_sandbox_only." };
   }
 
   if (value === "full_auto") {
     return {
       ok: false,
-      message: "Full auto mode is not enabled through Telegram in Phase 3. Use manual or trusted_auto after sandbox validation."
+      message: "Production-capable full_auto is not enabled. Use full_auto_sandbox_only after sandbox validation."
     };
   }
 
@@ -1889,7 +2039,7 @@ async function loadProductsForAction({
       .eq("user_id", userId)
       .gt("stock_quantity", 0)
       .order("created_at", { ascending: false })
-      .limit(limit),
+      .limit(Math.min(limit * 4, 100)),
     supabase.from("suppliers").select("*").eq("user_id", userId)
   ]);
 
@@ -1902,9 +2052,31 @@ async function loadProductsForAction({
   }
 
   return {
-    products: ((productResponse.data ?? []) as Array<Record<string, any>>).map(mapSupplierProduct),
+    products: ((productResponse.data ?? []) as Array<Record<string, any>>)
+      .map(mapSupplierProduct)
+      .filter((product) => !isRiskyProductText(`${product.title} ${product.category ?? ""} ${product.description ?? ""}`))
+      .sort((a, b) => scoreSupplierProductForSelection(b) - scoreSupplierProductForSelection(a))
+      .slice(0, limit),
     suppliers: ((supplierResponse.data ?? []) as Array<Record<string, any>>).map(mapSupplier)
   };
+}
+
+function scoreSupplierProductForSelection(product: SupplierProduct) {
+  let score = 0;
+
+  if (product.stockQuantity > 0) score += 20;
+  if (product.imageUrls.length > 0) score += 18;
+  if (product.supplierPrice > 0) score += 12;
+  if (product.shippingDays <= 10) score += 12;
+  if (!product.brand || /generic|unbranded/i.test(product.brand)) score += 10;
+  if (product.shippingCost <= Math.max(8, product.supplierPrice * 0.25)) score += 8;
+  if (product.category && !isRiskyProductText(`${product.title} ${product.category} ${product.description ?? ""}`)) score += 20;
+
+  return score;
+}
+
+function isRiskyProductText(text: string) {
+  return /weapon|knife|gun|ammo|medical|prescription|supplement|vitamin|adult|hazard|battery|counterfeit|replica|trademark|copyright|branded|luxury|cosmetic|skin|cream|drug|cbd/i.test(text);
 }
 
 function mapSupplierProduct(row: Record<string, any>): SupplierProduct {

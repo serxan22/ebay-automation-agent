@@ -2,7 +2,15 @@ import { DatabaseZap, FileSpreadsheet, PlugZap } from "lucide-react";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import type { Supplier } from "@/lib/types";
 
-export function SupplierCard({ supplier }: { supplier: Supplier }) {
+export function SupplierCard({
+  supplier,
+  productCount,
+  latestImportedAt
+}: {
+  supplier: Supplier;
+  productCount?: number;
+  latestImportedAt?: string | null;
+}) {
   const Icon = supplier.type === "csv" ? FileSpreadsheet : supplier.type === "custom" ? PlugZap : DatabaseZap;
   const tone = supplier.status === "active" ? "success" : supplier.status === "needs_attention" ? "warning" : "danger";
 
@@ -23,6 +31,10 @@ export function SupplierCard({ supplier }: { supplier: Supplier }) {
         <StatusBadge status={supplier.status.replace("_", " ")} tone={tone} />
       </div>
       <p className="mt-4 text-sm text-ink-600 dark:text-ink-300">{supplier.notes}</p>
+      <div className="mt-4 grid gap-2 text-sm text-ink-600 dark:text-ink-300">
+        <p>Products imported: {productCount ?? 0}</p>
+        <p>Latest import: {latestImportedAt ? new Date(latestImportedAt).toLocaleString() : "No import yet"}</p>
+      </div>
       <div className="mt-4 flex flex-wrap gap-2">
         <StatusBadge
           status={supplier.allowsDropshipping ? "Resale approved" : "Permission missing"}

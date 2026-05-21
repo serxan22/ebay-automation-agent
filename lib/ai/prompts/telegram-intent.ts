@@ -8,7 +8,7 @@ Return only one valid JSON object. Do not use markdown, explanations, or code fe
 
 Allowed JSON shape:
 {
-  "intent": "SHOW_SYSTEM_HEALTH" | "RESUME_AUTOMATION" | "PAUSE_AUTOMATION" | "SHOW_STATUS" | "SHOW_DAILY_REPORT" | "CHANGE_DAILY_LIMIT" | "CHANGE_MIN_MARGIN" | "CHANGE_MIN_PROFIT" | "CHANGE_RISK_TOLERANCE" | "ENABLE_TEST_MODE" | "FIND_PRODUCTS" | "ANALYZE_PRODUCTS" | "CREATE_LISTING_DRAFTS" | "SHOW_LISTING_DRAFTS" | "APPROVE_DRAFTS" | "REVISE_DRAFT_HELP" | "SHOW_EBAY_READINESS" | "DISCOVER_SHIPPING_SERVICES" | "RUN_FULFILLMENT_DOCS_TEST" | "RETRY_FULFILLMENT_STEP" | "SYNC_EBAY_POLICIES" | "CREATE_DEFAULT_EBAY_POLICIES" | "SETUP_EBAY_LOCATION" | "IMPROVE_LISTING_COPY" | "OPTIMIZE_IMAGES" | "SHOW_READY_DRAFTS" | "PUBLISH_READY_DRAFTS_SANDBOX" | "PUBLISH_SAFE_DRAFTS_SANDBOX" | "SHOW_FAILED_TASKS" | "UPDATE_BLOCKED_CATEGORY" | "UPDATE_BLOCKED_BRAND" | "CHANGE_APPROVAL_MODE" | "EXPLAIN_SYSTEM" | "ASK_CLARIFICATION" | "UNKNOWN",
+  "intent": "SHOW_SYSTEM_HEALTH" | "RESUME_AUTOMATION" | "PAUSE_AUTOMATION" | "SHOW_STATUS" | "SHOW_DAILY_REPORT" | "CHANGE_DAILY_LIMIT" | "CHANGE_MIN_MARGIN" | "CHANGE_MIN_PROFIT" | "CHANGE_RISK_TOLERANCE" | "ENABLE_TEST_MODE" | "FIND_PRODUCTS" | "ANALYZE_PRODUCTS" | "CREATE_LISTING_DRAFTS" | "SHOW_LISTING_DRAFTS" | "APPROVE_DRAFTS" | "REVISE_DRAFT_HELP" | "SHOW_EBAY_READINESS" | "DISCOVER_SHIPPING_SERVICES" | "RUN_FULFILLMENT_DOCS_TEST" | "RESOLVE_CATEGORIES" | "GENERATE_ITEM_SPECIFICS" | "RETRY_FULFILLMENT_STEP" | "SYNC_EBAY_POLICIES" | "CREATE_DEFAULT_EBAY_POLICIES" | "SETUP_EBAY_LOCATION" | "IMPROVE_LISTING_COPY" | "OPTIMIZE_IMAGES" | "SHOW_READY_DRAFTS" | "PUBLISH_READY_DRAFTS_SANDBOX" | "PUBLISH_SAFE_DRAFTS_SANDBOX" | "SHOW_FAILED_TASKS" | "UPDATE_BLOCKED_CATEGORY" | "UPDATE_BLOCKED_BRAND" | "CHANGE_APPROVAL_MODE" | "EXPLAIN_SYSTEM" | "ASK_CLARIFICATION" | "UNKNOWN",
   "confidence": number,
   "language": "az" | "tr" | "en" | "mixed",
   "parameters": {
@@ -19,7 +19,7 @@ Allowed JSON shape:
     "category": string | null,
     "blocked_category": string | null,
     "blocked_brand": string | null,
-    "approval_mode": "manual" | "trusted_auto" | "full_auto" | null,
+    "approval_mode": "manual" | "trusted_auto" | "full_auto" | "full_auto_sandbox_only" | null,
     "timeframe": "today" | "tomorrow" | "daily" | "weekly" | null,
     "publish_mode": "sandbox_only" | null,
     "draft_source": "latest_products" | "approved_products" | null,
@@ -55,6 +55,8 @@ Classification rules:
 - "ebay status", "sandbox connection status", "draftlar publish üçün hazırdır?" => SHOW_EBAY_READINESS.
 - "shipping services discover et" => DISCOVER_SHIPPING_SERVICES.
 - "docs fulfillment test elə", "official docs fulfillment test" => RUN_FULFILLMENT_DOCS_TEST.
+- "categoryləri tap", "missing categoryləri düzəlt", "resolve categories" => RESOLVE_CATEGORIES.
+- "item specifics hazırla", "generate required aspects" => GENERATE_ITEM_SPECIFICS.
 - "fulfillment niyə alınmır?", "retry fulfillment" => RETRY_FULFILLMENT_STEP.
 - "seller policies sync et", "business policies yenilə" => SYNC_EBAY_POLICIES.
 - "inventory location qur", "warehouse location setup et" => SETUP_EBAY_LOCATION.

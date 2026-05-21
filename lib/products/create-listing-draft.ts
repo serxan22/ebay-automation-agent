@@ -31,11 +31,20 @@ export function createListingDraft({
     ebayTitle: generatedListing.ebayTitle,
     ebayDescription: generatedListing.ebayDescription,
     ebayCategoryId: null,
+    ebayCategoryName: null,
+    ebayCategoryPath: null,
+    categoryTreeId: null,
+    categoryConfidence: null,
     itemSpecifics: generatedListing.itemSpecifics,
+    requiredItemSpecifics: [],
+    missingItemSpecifics: [],
     condition: "NEW",
     quantity: Math.min(settings.defaultQuantity, Math.max(product.stockQuantity, 1)),
     price: analysis.recommendedEbayPrice,
     optimizedImageUrls: optimizedImageUrls?.length ? optimizedImageUrls : product.imageUrls,
+    imageValidationStatus: (optimizedImageUrls?.length ? optimizedImageUrls : product.imageUrls).length ? "external" : "missing",
+    imageValidationWarnings: optimizedImageUrls?.length ? [] : ["External supplier image URLs are used until optimization runs."],
+    listingQualityScore: generatedListing.listingQualityScore ?? null,
     status,
     aiGenerated: true
   };
@@ -77,6 +86,7 @@ export function createSafeFallbackListingGeneration(
     shippingNote: `Supplier feed shipping time: ${product.shippingDays} days.`,
     returnNote: "Returns follow the seller's active eBay return policy.",
     conditionNote: "Review supplier data before publishing.",
+    listingQualityScore: 70,
     warnings: [
       "Safe fallback listing content was used.",
       ...(analysis?.rejectionReasons ?? [])

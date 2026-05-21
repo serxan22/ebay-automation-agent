@@ -23,6 +23,8 @@ export const TelegramIntentNameSchema = z.enum([
   "SHOW_EBAY_READINESS",
   "DISCOVER_SHIPPING_SERVICES",
   "RUN_FULFILLMENT_DOCS_TEST",
+  "RESOLVE_CATEGORIES",
+  "GENERATE_ITEM_SPECIFICS",
   "RETRY_FULFILLMENT_STEP",
   "SYNC_EBAY_POLICIES",
   "CREATE_DEFAULT_EBAY_POLICIES",
@@ -72,7 +74,7 @@ export const TelegramIntentParametersSchema = z
     category: NullableStringSchema.default(null),
     blocked_category: NullableStringSchema.default(null),
     blocked_brand: NullableStringSchema.default(null),
-    approval_mode: z.enum(["manual", "trusted_auto", "full_auto"]).nullable().default(null),
+    approval_mode: z.enum(["manual", "trusted_auto", "full_auto", "full_auto_sandbox_only"]).nullable().default(null),
     timeframe: z.enum(["today", "tomorrow", "daily", "weekly"]).nullable().default(null),
     publish_mode: z.enum(["sandbox_only"]).nullable().default(null),
     draft_source: z.enum(["latest_products", "approved_products"]).nullable().default(null),
@@ -333,6 +335,22 @@ export function parseTelegramIntentHeuristically(
     });
   }
 
+  if (/(category|categoryleri|categoryləri|kateqoriya|kateqoriyalari|kateqoriyaları).*(tap|find|duzelt|düzəlt|resolve)|(missing category|missing categoryleri|missing categoryləri)/.test(text)) {
+    return makeIntent("RESOLVE_CATEGORIES", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.88,
+      safe_response: "Missing eBay categoryləri Taxonomy API ilə resolve edirəm."
+    });
+  }
+
+  if (/(item specific|item specifics|specifics|aspect|aspects).*(hazirla|hazırla|generate|duzelt|düzəlt|tap)/.test(text)) {
+    return makeIntent("GENERATE_ITEM_SPECIFICS", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.88,
+      safe_response: "Category-required item specifics hazırlanır."
+    });
+  }
+
   if (isUnsafeDropshippingRequest(text)) {
     return makeIntent("ASK_CLARIFICATION", language, {
       confidence: 0.84,
@@ -410,6 +428,15 @@ export function parseTelegramIntentHeuristically(
       parameters: { ...parameters, min_margin_percentage: margin },
       confidence: 0.86,
       safe_response: `Minimum margin ${margin}% olaraq yadda saxlanacaq.`
+    });
+  }
+
+  if (/(full auto sandbox|full_auto_sandbox_only|sandbox only auto|sandbox auto)/.test(text)) {
+    return makeIntent("CHANGE_APPROVAL_MODE", language, {
+      parameters: { ...parameters, approval_mode: "full_auto_sandbox_only" },
+      confidence: 0.8,
+      safe_response:
+        "Full auto sandbox-only mode production publish etmir və readiness tam deyilsə publish bloklanır."
     });
   }
 
@@ -636,6 +663,22 @@ export function parseDeterministicControlIntent(
     });
   }
 
+  if (/(category|categoryleri|categoryləri|kateqoriya|kateqoriyalari|kateqoriyaları).*(tap|find|duzelt|düzəlt|resolve)|(missing category|missing categoryleri|missing categoryləri)/.test(text)) {
+    return makeIntent("RESOLVE_CATEGORIES", language, {
+      parameters: { quantity: extractQuantity(text) ?? null, user_question: message },
+      confidence: 0.9,
+      safe_response: "Missing eBay categoryləri resolve edirəm."
+    });
+  }
+
+  if (/(item specific|item specifics|specifics|aspect|aspects).*(hazirla|hazırla|generate|duzelt|düzəlt|tap)/.test(text)) {
+    return makeIntent("GENERATE_ITEM_SPECIFICS", language, {
+      parameters: { quantity: extractQuantity(text) ?? null, user_question: message },
+      confidence: 0.9,
+      safe_response: "Required item specifics hazırlanır."
+    });
+  }
+
   if (isShowListingDraftsRequest(text)) {
     return makeIntent("SHOW_LISTING_DRAFTS", language, {
       parameters: {
@@ -728,6 +771,9 @@ export const telegramIntentExamples: Array<{ message: string; expectedIntent: Te
   { message: "approved draftları göstər", expectedIntent: "SHOW_LISTING_DRAFTS" },
   { message: "safe draftları approve et", expectedIntent: "APPROVE_DRAFTS" },
   { message: "docs fulfillment test elə", expectedIntent: "RUN_FULFILLMENT_DOCS_TEST" },
+  { message: "categoryləri tap", expectedIntent: "RESOLVE_CATEGORIES" },
+  { message: "missing categoryləri düzəlt", expectedIntent: "RESOLVE_CATEGORIES" },
+  { message: "item specifics hazırla", expectedIntent: "GENERATE_ITEM_SPECIFICS" },
   { message: "10 dənə məhsul tap bu supplierdan və 20 faiz profitlə listing hazırla", expectedIntent: "CREATE_LISTING_DRAFTS" }
 ];
 
