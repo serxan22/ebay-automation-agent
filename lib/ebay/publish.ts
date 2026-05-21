@@ -170,7 +170,7 @@ export async function publishListingDraftToEbaySandbox({
       categoryId,
       listingDescription: draft.ebay_description,
       price: Number(draft.price),
-      currency: product?.currency ?? "USD",
+      currency: product?.currency || "USD",
       merchantLocationKey: account.inventory_location_key ?? "",
       paymentPolicyId: account.payment_policy_id ?? "",
       returnPolicyId: account.return_policy_id ?? "",
