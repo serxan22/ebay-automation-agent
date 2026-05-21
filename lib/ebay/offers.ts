@@ -17,45 +17,28 @@ export interface EbayOfferInput {
 }
 
 export async function createOffer(accessToken: string, input: EbayOfferInput) {
-  if (!input.paymentPolicyId || !input.returnPolicyId || !input.fulfillmentPolicyId) {
-    throw new EbayIntegrationError("Required eBay policy IDs are missing.", "MISSING_POLICY");
-  }
+  try {
+    return await ebayFetch<{ offerId: string }>({
+      accessToken,
+      method: "POST",
+      path: "/sell/inventory/v1/offer",
+      body: input,
+    });
+  } catch (error) {
+    const responseBody = (error as { ebay?: { responseBody?: unknown } })?.ebay?.responseBody as
+      | { errors?: Array<{ message?: string; parameters?: Array<{ name?: string; value?: string }> }> }
+      | undefined;
 
-  if (!input.merchantLocationKey) {
-    throw new EbayIntegrationError("Inventory location key is missing.", "MISSING_LOCATION");
-  }
+    const existingOfferId = responseBody?.errors
+      ?.find((item) => item.message?.toLowerCase().includes("offer entity already exists"))
+      ?.parameters?.find((parameter) => parameter.name === "offerId")?.value;
 
-  if (!input.categoryId) {
-    throw new EbayIntegrationError("eBay category ID is required.", "INVALID_CATEGORY");
-  }
-
-  return ebayFetch<{ offerId: string }>({
-    accessToken,
-    path: "/sell/inventory/v1/offer",
-    method: "POST",
-    marketplaceId: input.marketplaceId,
-    body: {
-      sku: input.sku,
-      marketplaceId: input.marketplaceId,
-      format: input.format ?? "FIXED_PRICE",
-      availableQuantity: input.availableQuantity,
-      categoryId: input.categoryId,
-      listingDescription: input.listingDescription,
-      includeCatalogProductDetails: false,
-      pricingSummary: {
-        price: {
-          value: input.price.toFixed(2),
-          currency: input.currency
-        }
-      },
-      merchantLocationKey: input.merchantLocationKey,
-      listingPolicies: {
-        paymentPolicyId: input.paymentPolicyId,
-        returnPolicyId: input.returnPolicyId,
-        fulfillmentPolicyId: input.fulfillmentPolicyId
-      }
+    if (existingOfferId) {
+      return { offerId: existingOfferId };
     }
-  });
+
+    throw error;
+  }
 }
 
 export async function publishOffer(accessToken: string, offerId: string) {
