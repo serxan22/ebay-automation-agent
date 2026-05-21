@@ -129,7 +129,9 @@ export async function publishListingDraftToEbaySandbox({
     validateAccountForPublish(account);
 
     const sku = buildEbaySku(draft, product?.supplier_sku ?? undefined);
-    const aspects = sanitizeAspects(draft.item_specifics ?? {});
+    const { aspects,
+      brand,
+      mpn, brand, mpn } = ensureBrandMpn(sanitizeAspects(draft.item_specifics ?? {}));
     const categoryId = draft.ebay_category_id ?? "";
 
     await updateDraftAttempt({ supabase, userId, draftId, attempt, status: "approved" });
@@ -434,6 +436,39 @@ function sanitizeAspects(aspects: Record<string, string | string[]>) {
     })
   );
 }
+
+function getFirstAspectValue(aspects: Record<string, string[]>, key: string): string | undefined {
+  const exact = aspects[key];
+  if (Array.isArray(exact) && exact[0]?.trim()) {
+    return exact[0].trim();
+  }
+
+  const foundKey = Object.keys(aspects).find((item) => item.toLowerCase() === key.toLowerCase());
+  const found = foundKey ? aspects[foundKey] : undefined;
+
+  if (Array.isArray(found) && found[0]?.trim()) {
+    return found[0].trim();
+  }
+
+  return undefined;
+}
+
+function ensureBrandMpn(aspects: Record<string, string[]>): {
+  aspects: Record<string, string[]>;
+  brand: string;
+  mpn: string;
+} {
+  const next: Record<string, string[]> = { ...aspects };
+
+  const brand = getFirstAspectValue(next, "Brand") || "Unbranded";
+  const mpn = getFirstAspectValue(next, "MPN") || "Does Not Apply";
+
+  next.Brand = [brand];
+  next.MPN = [mpn];
+
+  return { aspects: next, brand, mpn };
+}
+
 
 function normalizeCondition(condition: string) {
   return condition.toUpperCase() === "NEW" ? "NEW" : condition;
