@@ -52,7 +52,14 @@ export async function GET() {
     }
 
     return NextResponse.json(
-      { error: normalized.message, code: normalized.code, recommendation: normalized.recommendation },
+      {
+        ok: false,
+        error: normalized.message,
+        message: normalized.message,
+        code: normalized.code,
+        recommendation: normalized.recommendation,
+        details: normalized.details
+      },
       { status: 400 }
     );
   }
@@ -96,11 +103,14 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
+        ok: false,
         error: normalized.message,
+        message: normalized.message,
         code: normalized.code,
         recommendation:
           normalized.recommendation ??
-          "Create a warehouse location with a country plus postal code, or city/state/country, then retry."
+          "Create a warehouse location with a country plus postal code, or city/state/country, then retry.",
+        details: normalized.details
       },
       { status: 400 }
     );

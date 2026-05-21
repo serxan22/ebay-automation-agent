@@ -13,7 +13,10 @@ export interface OptimizeProductImagesInput {
 export interface OptimizeProductImagesResult {
   optimizedUrls: string[];
   rejected: Array<{ url: string; reason: string }>;
+  warnings: string[];
 }
+
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 12_000;
 
 export async function optimizeProductImages({
   imageUrls,
@@ -25,6 +28,11 @@ export async function optimizeProductImages({
   const uniqueUrls = Array.from(new Set(imageUrls.filter(Boolean))).slice(0, maxImages);
   const optimizedUrls: string[] = [];
   const rejected: Array<{ url: string; reason: string }> = [];
+  const warnings: string[] = [];
+
+  if (!store) {
+    warnings.push("Supabase Storage is not configured for this run; validated external image URLs were kept.");
+  }
 
   for (const [index, url] of uniqueUrls.entries()) {
     const validation = await validateImageUrl(url);
@@ -35,7 +43,15 @@ export async function optimizeProductImages({
     }
 
     try {
-      const response = await fetch(url);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), IMAGE_DOWNLOAD_TIMEOUT_MS);
+      let response: Response;
+
+      try {
+        response = await fetch(url, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         rejected.push({ url, reason: `Image download returned HTTP ${response.status}.` });
@@ -81,5 +97,5 @@ export async function optimizeProductImages({
     }
   }
 
-  return { optimizedUrls, rejected };
+  return { optimizedUrls, rejected, warnings };
 }

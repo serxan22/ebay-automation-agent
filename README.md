@@ -155,6 +155,10 @@ Phase 1 creates manual-review listing drafts only. The AI listing generator:
 - Keeps eBay titles under 80 characters
 - Avoids supplier mentions and spammy language
 - Uses safe fallback output when no AI API key is configured
+- Prices from supplier cost, shipping cost, estimated marketplace fee, desired margin, promoted-listing buffer, and minimum profit
+- Produces clean HTML with bullet points, key features, package-includes text, shipping note, return note, listing quality/readiness score, and missing-fields report
+- Supports `Regenerate listing copy` from Listings and `draftı premium et` / `title SEO üçün düzəlt` from Telegram
+- Validates image URLs before publish; if Supabase Storage is configured, optimized copies can be uploaded to the `product-images` bucket, otherwise external URLs are kept with a warning
 
 ## eBay Sandbox
 
@@ -247,15 +251,19 @@ Sandbox publishing flow:
 The settings page can check eBay Account API programs through:
 
 ```text
+GET /api/system/health
+GET /api/ebay/status
 GET /api/ebay/programs
-POST /api/ebay/programs/opt-in-selling-policies
-POST /api/ebay/policies/create-defaults
-POST /api/ebay/policies/retry-fulfillment
-POST /api/ebay/policies/retry-fulfillment-step
-POST /api/ebay/policies/fulfillment-long-test
 GET /api/ebay/policies/debug
 GET /api/ebay/shipping-services
-GET /api/system/health
+POST /api/ebay/programs/opt-in-selling-policies
+POST /api/ebay/policies/create-defaults
+POST /api/ebay/policies/sync
+POST /api/ebay/policies/retry-fulfillment
+POST /api/ebay/policies/retry-fulfillment-step
+POST /api/ebay/policies/fulfillment-docs-test
+POST /api/ebay/policies/fulfillment-long-test
+POST /api/ebay/location
 ```
 
 `GET /api/ebay/programs` calls `get_opted_in_programs` and reports whether `SELLING_POLICY_MANAGEMENT` is active. `POST /api/ebay/programs/opt-in-selling-policies` calls `program/opt_in` with `{ "programType": "SELLING_POLICY_MANAGEMENT" }`. eBay can take time to activate program opt-in, so wait and check again before retrying policy sync.
@@ -264,13 +272,43 @@ Opt-in only enables the Business Policies feature. The sandbox seller still need
 
 The sandbox seller UI may not expose Business Policies reliably, so the app does not depend on manual policy screens. `GET /api/ebay/shipping-services` calls the Trading API `GeteBayDetails` with `ShippingServiceDetails` using the connected seller token, then returns safe EBAY_US shipping service diagnostics. Fulfillment policy creation prefers discovered domestic services that are valid for selling flow, with fallback candidates if discovery fails.
 
-Default fulfillment policy creation tries discovered EBAY_US services first and is capped at eight attempts so it returns a visible result instead of hanging. Fulfillment POST calls allow up to 20 seconds, and each attempt is recorded before the eBay request so timeout responses still show service code, schema variant, status, and message. The first `USPSFirstClass` attempts use minimal free-shipping and buyer-paid `$5` schemas; later attempts use official-style free shipping, boolean zero-cost shipping, and fallback services. Preferred service codes include `USPSFirstClass`, `USPSPriority`, `UPSGround`, `FedExHomeDelivery`, `USPSPriorityFlatRateBox`, `USPSGroundAdvantage`, `USPSParcel`, and `FedExGround`. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
+Default fulfillment policy creation uses the eBay Account API createFulfillmentPolicy endpoint with the trailing slash: `POST /sell/account/v1/fulfillment_policy/`. JSON POST/PUT requests send `Content-Type: application/json`, and the response handler supports `201 Created`, an empty or JSON response body, and the `Location` response header that can contain the created fulfillment policy URL. Payment and return policies remain saved even if fulfillment policy creation needs another retry.
+
+Step fulfillment retry is intentionally bounded: one request tries one creation attempt with an 8 second eBay timeout. The order is `USPSFirstClass` free minimal, `USPSFirstClass` buyer-paid `$5`, `USPSPriority` free minimal, `USPSPriority` buyer-paid `$5`, `UPSGround` buyer-paid `$5`, `FedExHomeDelivery` buyer-paid `$5`, `USPSPriorityFlatRateBox` official docs sample, then any discovered domestic valid service not already tried.
 
 If Settings appears stuck on `Creating...`, the client now times out after 25 seconds and resets the active button. Use `Retry next fulfillment attempt` to call `POST /api/ebay/policies/retry-fulfillment-step`; each request tries one schema/service with an 8 second eBay timeout and returns a visible result. Then open `GET /api/ebay/policies/debug` to inspect stored policy IDs, policy counts, fulfillment missing reason, and the latest safe fulfillment attempt logs. It never returns OAuth tokens.
 
-If every step-based fulfillment attempt times out, use `Run long fulfillment test` in Settings or call `POST /api/ebay/policies/fulfillment-long-test`. The long test tries exactly one minimal `USPSFirstClass` buyer-paid `$5.00` fulfillment policy with a 45 second server timeout, then runs seller policy sync once. If it also times out, the app reports that the eBay sandbox Account API did not respond for fulfillment policy creation. Payment, return, OAuth, and inventory can still be ready, but real sandbox offer publish remains blocked because eBay requires a real fulfillment policy ID.
+If every step-based fulfillment attempt fails or times out, use `Run docs fulfillment test` in Settings or call `POST /api/ebay/policies/fulfillment-docs-test`. This route is separate from retry and long-test logic. It sends the official docs sample body exactly, uses `/sell/account/v1/fulfillment_policy/`, waits up to 45 seconds, captures `schemaVariant`, `endpoint`, `status`, `timedOut`, `requestBodyUsed`, response body, `Location`, `fulfillmentPolicyId`, and `ebayErrors`, then syncs seller policies only after success.
 
-`GET /api/system/health` returns the same checklist shown on Dashboard → System health: connection, Telegram, AI parser, seller policies, location, product/draft counts, publish-ready drafts, last automation error, last integration warning, and suggested next action.
+Expected docs-test success:
+
+```json
+{
+  "ok": true,
+  "schemaVariant": "official_docs_sample",
+  "endpoint": "/sell/account/v1/fulfillment_policy/",
+  "status": 201,
+  "timedOut": false,
+  "fulfillmentPolicyId": "real-policy-id",
+  "locationHeader": "https://api.sandbox.ebay.com/sell/account/v1/fulfillment_policy/real-policy-id"
+}
+```
+
+Expected docs-test blocker if the sandbox endpoint is broken:
+
+```json
+{
+  "ok": false,
+  "schemaVariant": "official_docs_sample",
+  "endpoint": "/sell/account/v1/fulfillment_policy/",
+  "code": "EBAY_INTERNAL_ERROR",
+  "message": "eBay returned internal application error 20500 from the official fulfillment policy endpoint."
+}
+```
+
+`20500` means the official sandbox Account API endpoint returned an internal application error. It is not mapped to invalid category. Payment, return, OAuth, product analysis, draft creation, listing copy/images, approval, and readiness diagnostics can continue, but real sandbox offer publish remains blocked because eBay requires a real fulfillment policy ID.
+
+`GET /api/system/health` returns the same checklist shown on Dashboard → System health: auth, Telegram, AI provider, supplier products count, analyzed products count, draft count, sandbox connection, refresh token, Business Policies, payment policy, return policy, fulfillment policy, inventory location, publish readiness, last blocking issue, last automation error, last integration warning, and next action.
 
 The OAuth callback issue was fixed by using the neutral public app domain and clean callback route:
 
@@ -297,12 +335,15 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 - `20403 User is not eligible for Business Policy`: the sandbox seller is not opted into `SELLING_POLICY_MANAGEMENT`. Click `Enable seller policies`, wait for eBay to activate the program if needed, then click `Sync seller policies` again.
 - No policies found: Business Policies are active, but no payment, return, and fulfillment policies exist yet. Click `Create default seller policies`, or create the policies manually in seller settings, then sync again.
 - Payment/return created but fulfillment missing: eBay sandbox can reject Account API shipping services or return an internal application error even when Business Policies are active. Click `Discover shipping services`, then `Retry next fulfillment attempt` or `Auto-run attempts one by one`.
-- All fulfillment attempts timeout: if `USPSFirstClass`, `USPSPriority`, `UPSGround`, `FedExHomeDelivery`, `USPSPriorityFlatRateBox`, and discovered services all time out, run `Run long fulfillment test`. A timeout there means the sandbox seller's Account API fulfillment policy endpoint is the blocker, not the shipping code. `ALLOW_SANDBOX_POLICY_FALLBACK=true` can be used only for readiness/inventory diagnostics; offer publish is blocked until a real fulfillment policy ID exists.
+- All fulfillment attempts timeout: if `USPSFirstClass`, `USPSPriority`, `UPSGround`, `FedExHomeDelivery`, `USPSPriorityFlatRateBox`, and discovered services all time out, run `Run docs fulfillment test`. It uses `POST /sell/account/v1/fulfillment_policy/`, `Content-Type: application/json`, the official docs sample body, and captures `201 Created` plus the `Location` header if eBay returns one. If the docs sample also times out, the sandbox seller's Account API fulfillment policy endpoint is the blocker, not the shipping code. `ALLOW_SANDBOX_POLICY_FALLBACK=true` can be used only for readiness/inventory diagnostics; offer publish is blocked until a real fulfillment policy ID exists.
+- Fulfillment `20500` internal error: if the docs sample returns `errorId=20500`, report it as an eBay sandbox Account API issue and keep offer publish blocked. Do not treat it as invalid category.
 - `Creating...` stuck in Settings: the browser action should time out after 25 seconds and show `Request timed out. Check Vercel logs or try again.` Retry with `Retry next fulfillment attempt`, then check `/api/ebay/policies/debug` for bounded attempt details. If eBay times out server-side, the UI should show `eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details.`
 - Invalid shipping service code: sandbox rejected the fulfillment policy shipping service. The app discovers valid EBAY_US services first, then tries official-style free shipping and boolean zero-cost schemas while keeping any payment/return policies already created.
 - Missing inventory location: click `Setup location` in Settings.
 - Invalid category/aspects: revise the draft category ID and item specifics JSON.
 - Image error: use publicly accessible HTTP/HTTPS image URLs; HTTPS is recommended.
+- Draft not ready: Listings shows exact missing fields such as title length, description, price, quantity, SKU, category, item specifics, image URL, policies, token, or inventory location.
+- Publish blocked: production is locked; sandbox createOffer and publishOffer are blocked until payment, return, fulfillment, inventory location, approval, title, description, price, quantity, SKU, category, item specifics, and image checks are ready.
 
 ### End-to-End Sandbox Test
 
@@ -314,9 +355,13 @@ Production publishing is intentionally blocked. Keep `EBAY_ENVIRONMENT=sandbox`;
 6. Confirm `Business policies` is `Active`, or click `Enable seller policies` and wait if eBay needs time to activate `SELLING_POLICY_MANAGEMENT`.
 7. Click `Sync seller policies`.
 8. If no policy IDs are found, click `Create default seller policies`. If only fulfillment is missing, click `Discover shipping services`, then `Retry next fulfillment attempt` or `Auto-run attempts one by one`.
-9. Click `Setup location`.
-10. Create or revise a listing draft until readiness is green, then approve it.
-11. Click `Publish sandbox`.
+9. If all step attempts fail, click `Run docs fulfillment test`. If it returns `20500`, record the sandbox Account API blocker and continue demo workflow without publish.
+10. Click `Setup location`.
+11. Import supplier products.
+12. Analyze products and create drafts.
+13. Regenerate listing copy and run image validation/optimization if needed.
+14. Approve safe drafts.
+15. Click `Publish sandbox` only when System health shows fulfillment policy stored and publish readiness is clear.
 
 Manual sandbox setup is a last resort only if shipping-service discovery also fails and eBay still rejects all Account API fulfillment policy attempts. The normal path is Settings → `Discover shipping services` → `Retry next fulfillment attempt` → `Setup location`, Listings → approve draft, Listings → `Publish sandbox`.
 
@@ -330,12 +375,13 @@ Manual sandbox setup is a last resort only if shipping-service discovery also fa
 6. Click `Sync seller policies`.
 7. If payment/return/fulfillment policies do not exist, click `Create default seller policies`.
 8. If fulfillment is still missing, click `Discover shipping services`, then `Retry next fulfillment attempt`; use `Auto-run attempts one by one` only when you want the UI to walk the bounded attempts.
-9. Click `Setup location`.
-10. Import supplier products from `/dashboard/suppliers`.
-11. Use Telegram or `/dashboard/products` to analyze products.
-12. Create listing drafts, improve listing copy/images, and approve safe drafts.
-13. Publish sandbox only from `/dashboard/listings` or Telegram.
-14. Use `/api/system/health`, `/api/ebay/policies/debug`, `/api/ebay/shipping-services`, and `/api/ebay/status` for diagnostics.
+9. If all fulfillment attempts fail or time out, run `Run docs fulfillment test`; if it returns `20500`, keep publish blocked and use `ALLOW_SANDBOX_POLICY_FALLBACK=true` only for diagnostics/demo workflow.
+10. Click `Setup location`.
+11. Import supplier products from `/dashboard/suppliers`.
+12. Use Telegram or `/dashboard/products` to analyze products.
+13. Create listing drafts, improve listing copy/images, and approve safe drafts.
+14. Publish sandbox only from `/dashboard/listings` or Telegram when fulfillment policy is stored.
+15. Use `/api/system/health`, `/api/ebay/policies/debug`, `/api/ebay/shipping-services`, and `/api/ebay/status` for diagnostics.
 
 ## Telegram Bot
 
@@ -429,6 +475,7 @@ The `/dashboard/telegram` page shows `AI active` when Groq, OpenAI, or Anthropic
 - `IMPROVE_LISTING_COPY`
 - `OPTIMIZE_IMAGES`
 - `DISCOVER_SHIPPING_SERVICES`
+- `RUN_FULFILLMENT_DOCS_TEST`
 - `RETRY_FULFILLMENT_STEP`
 - `SYNC_EBAY_POLICIES`
 - `CREATE_DEFAULT_EBAY_POLICIES`
@@ -458,6 +505,7 @@ Example messages:
 - `sistem statusu`
 - `publish üçün nə çatmır?`
 - `fulfillment niyə alınmır?`
+- `docs fulfillment test elə`
 - `shipping services discover et`
 - `descriptionu daha cəlbedici et`
 - `şəkilləri hazırla`
@@ -473,7 +521,7 @@ Every connected Telegram request is saved to `agent_tasks` with the parsed inten
 ## Automation Modes
 
 - `manual`: default; drafts are held for approval
-- `trusted_auto`: future mode for high-score products only
+- `trusted_auto`: high-score safe drafts can be auto-approved and published to sandbox only when all readiness checks, including real fulfillment policy, are complete
 - `full_auto`: future mode, still blocked by risk and daily limits
 
 New seller safe mode defaults:

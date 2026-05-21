@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getValidEbayAccessToken } from "@/lib/ebay/account";
+import { normalizePublishError } from "@/lib/ebay/publish";
 import { discoverShippingServicesWithFallback, getPreferredDomesticShippingServices } from "@/lib/ebay/shipping-services";
 import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 
@@ -42,10 +43,16 @@ export async function GET() {
       return authResponse;
     }
 
+    const normalized = normalizePublishError(error);
+
     return NextResponse.json(
       {
         ok: false,
-        error: error instanceof Error ? error.message : "Could not discover eBay shipping services."
+        error: normalized.message,
+        message: normalized.message,
+        code: normalized.code,
+        recommendation: normalized.recommendation,
+        details: normalized.details
       },
       { status: 400 }
     );

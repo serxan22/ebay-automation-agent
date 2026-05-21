@@ -58,6 +58,7 @@ export async function POST() {
         code: normalized.code,
         recommendation: normalized.recommendation,
         attempts: [],
+        ebayErrors: [],
         details: normalized.details
       },
       { status: 400 }

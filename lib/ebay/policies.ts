@@ -1,4 +1,4 @@
-import { ebayFetch, getEbayConfig } from "@/lib/ebay/client";
+import { ebayFetch, ebayFetchWithMeta, getEbayConfig } from "@/lib/ebay/client";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getValidEbayAccessToken, type EbayAccountRecord } from "@/lib/ebay/account";
@@ -87,9 +87,11 @@ const FULFILLMENT_POLICY_POST_TIMEOUT_MS = 20_000;
 const FULFILLMENT_POLICY_ROUTE_BUDGET_MS = 24_000;
 const FULFILLMENT_POLICY_STEP_TIMEOUT_MS = 8_000;
 const FULFILLMENT_POLICY_LONG_TEST_TIMEOUT_MS = 45_000;
+const FULFILLMENT_POLICY_CREATE_PATH = "/sell/account/v1/fulfillment_policy/";
 interface FulfillmentPolicyAttempt {
   attemptNumber: number;
   schema:
+    | "official_docs_sample"
     | "free_shipping_minimal"
     | "buyer_paid_minimal"
     | "official_string_free"
@@ -132,11 +134,30 @@ export interface FulfillmentPolicyLongTestResult {
   syncError?: string | null;
 }
 
+export interface FulfillmentPolicyDocsTestResult {
+  ok: boolean;
+  schemaVariant: "official_docs_sample";
+  code?: string | null;
+  message?: string | null;
+  status: number | null;
+  timedOut: boolean;
+  timeoutMs: number;
+  endpoint: string;
+  requestBodyUsed: ReturnType<typeof buildOfficialDocsFulfillmentPolicyBody>;
+  responseBody: unknown;
+  locationHeader: string | null;
+  fulfillmentPolicyId: string | null;
+  details?: unknown;
+  recommendation: string;
+  errorSummary?: string | null;
+  ebayErrors?: ReturnType<typeof extractEbayErrorSummaries>;
+}
+
 export async function getFulfillmentPolicies(accessToken: string, marketplaceId = "EBAY_US") {
   return ebayFetch<{ fulfillmentPolicies: SellerPolicy[] }>({
     accessToken,
     marketplaceId,
-    path: `/sell/account/v1/fulfillment_policy?marketplace_id=${marketplaceId}`,
+    path: `/sell/account/v1/fulfillment_policy/?marketplace_id=${marketplaceId}`,
     timeoutMs: 7_000
   });
 }
@@ -296,7 +317,7 @@ export async function createDefaultFulfillmentPolicy({
         accessToken,
         marketplaceId,
         method: "POST",
-        path: "/sell/account/v1/fulfillment_policy",
+        path: FULFILLMENT_POLICY_CREATE_PATH,
         body: buildDefaultFulfillmentPolicyBody(marketplaceId, attempt),
         timeoutMs: FULFILLMENT_POLICY_POST_TIMEOUT_MS,
         timeoutCode: "FULFILLMENT_POLICY_CREATE_FAILED"
@@ -344,12 +365,15 @@ export async function createDefaultFulfillmentPolicy({
   const summary = summarizePolicyCreateError(lastError);
   const timedOut = attemptResults.some((attempt) => attempt.status === "timeout");
   const attemptedShippingServices = Array.from(new Set(attemptResults.map((attempt) => attempt.serviceCode)));
+  const finalCode = ["TOKEN_EXPIRED", "EBAY_TIMEOUT", "EBAY_INTERNAL_ERROR", "INVALID_SHIPPING_SERVICE"].includes(summary.code)
+    ? summary.code
+    : "FULFILLMENT_POLICY_CREATE_FAILED";
   throw new EbayIntegrationError(
     timedOut
       ? "eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details."
       : "Fulfillment policy creation failed after trying discovered and fallback shipping services.",
-    summary.code === "TOKEN_EXPIRED" ? summary.code : "FULFILLMENT_POLICY_CREATE_FAILED",
-    getEbayErrorRecommendation(summary.code === "TOKEN_EXPIRED" ? summary.code : "FULFILLMENT_POLICY_CREATE_FAILED"),
+    finalCode,
+    getEbayErrorRecommendation(finalCode),
     {
       attempts: attemptResults,
       attemptedShippingServices,
@@ -725,7 +749,8 @@ export async function retryFulfillmentPolicyStep({
       nextAttemptIndex: null,
       attempt: null,
       fulfillmentPolicyStored: false,
-      message: "All fulfillment policy attempts have been tried. eBay sandbox did not create a fulfillment policy.",
+      message:
+        "All fulfillment creation attempts failed or timed out. Run the official docs fulfillment test to confirm whether eBay sandbox Account API is failing.",
       attempts: []
     };
   }
@@ -768,7 +793,7 @@ export async function retryFulfillmentPolicyStep({
       accessToken,
       marketplaceId,
       method: "POST",
-      path: "/sell/account/v1/fulfillment_policy",
+      path: FULFILLMENT_POLICY_CREATE_PATH,
       body: buildDefaultFulfillmentPolicyBody(marketplaceId, attempt),
       timeoutMs: FULFILLMENT_POLICY_STEP_TIMEOUT_MS,
       timeoutCode: "FULFILLMENT_POLICY_CREATE_FAILED"
@@ -825,15 +850,19 @@ export async function retryFulfillmentPolicyStep({
       }
     });
 
+    const completed = resolvedAttemptIndex + 1 >= attempts.length;
+
     return {
       ok: false,
-      completed: resolvedAttemptIndex + 1 >= attempts.length,
-      nextAttemptIndex: resolvedAttemptIndex + 1 < attempts.length ? resolvedAttemptIndex + 1 : null,
+      completed,
+      nextAttemptIndex: completed ? null : resolvedAttemptIndex + 1,
       attempt: attemptResult,
       fulfillmentPolicyStored: false,
-      message: timedOut
-        ? "eBay sandbox timed out while creating the fulfillment policy. Try the next attempt; if it repeats, inspect Policy creation details."
-        : "Fulfillment policy attempt failed. Try the next attempt.",
+      message: completed
+        ? "All fulfillment creation attempts failed or timed out. Run the official docs fulfillment test to confirm whether eBay sandbox Account API is failing."
+        : timedOut
+          ? "eBay sandbox timed out while creating the fulfillment policy. Try the next attempt; if it repeats, inspect Policy creation details."
+          : "Fulfillment policy attempt failed. Try the next attempt.",
       attempts: [attemptResult]
     };
   }
@@ -905,7 +934,7 @@ export async function runFulfillmentPolicyLongTest({
       accessToken,
       marketplaceId,
       method: "POST",
-      path: "/sell/account/v1/fulfillment_policy",
+      path: FULFILLMENT_POLICY_CREATE_PATH,
       body: buildDefaultFulfillmentPolicyBody(marketplaceId, attempt),
       timeoutMs,
       timeoutCode: "FULFILLMENT_POLICY_CREATE_FAILED"
@@ -992,6 +1021,179 @@ export async function runFulfillmentPolicyLongTest({
   };
 }
 
+export async function runFulfillmentPolicyDocsTest({
+  supabase,
+  userId,
+  marketplaceId = "EBAY_US",
+  timeoutMs = FULFILLMENT_POLICY_LONG_TEST_TIMEOUT_MS
+}: {
+  supabase: SupabaseClient;
+  userId: string;
+  marketplaceId?: string;
+  timeoutMs?: number;
+}): Promise<FulfillmentPolicyDocsTestResult> {
+  const config = getEbayConfig();
+
+  if (config.environment !== "sandbox") {
+    throw new EbayIntegrationError(
+      "Fulfillment policy diagnostics are available for sandbox only.",
+      "PRODUCTION_DISABLED",
+      getEbayErrorRecommendation("PRODUCTION_DISABLED")
+    );
+  }
+
+  const endpoint = FULFILLMENT_POLICY_CREATE_PATH;
+  const requestBodyUsed = buildOfficialDocsFulfillmentPolicyBody(marketplaceId);
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: "info",
+    module: "ebay_policies",
+    message: "ebay_fulfillment_docs_test_started",
+    metadata: {
+      marketplaceId,
+      endpoint: FULFILLMENT_POLICY_CREATE_PATH,
+      timeoutMs,
+      schemaVariant: "official_docs_sample"
+    }
+  });
+
+  const { account, accessToken } = await getValidEbayAccessToken({
+    supabase,
+    userId,
+    marketplace: marketplaceId
+  });
+
+  let status: number | null = null;
+  let timedOut = false;
+  let responseBody: unknown = null;
+  let locationHeader: string | null = null;
+  let ebayErrors: ReturnType<typeof extractEbayErrorSummaries> = [];
+  let errorSummary: string | null = null;
+  let code: string | null = null;
+  let message: string | null = null;
+  let details: unknown = null;
+
+  try {
+    const response = await ebayFetchWithMeta<SellerPolicy>({
+      accessToken,
+      marketplaceId,
+      method: "POST",
+      path: FULFILLMENT_POLICY_CREATE_PATH,
+      body: requestBodyUsed,
+      timeoutMs,
+      timeoutCode: "FULFILLMENT_POLICY_CREATE_FAILED"
+    });
+    status = response.status;
+    responseBody = response.body;
+    locationHeader = response.locationHeader;
+  } catch (error) {
+    timedOut = isFulfillmentPolicyTimeoutError(error);
+    status = error instanceof EbayIntegrationError ? extractStatusFromEbayError(error) : null;
+    locationHeader = error instanceof EbayIntegrationError ? extractLocationHeaderFromEbayError(error) : null;
+    responseBody = extractSafeEbayResponse(error);
+    ebayErrors = extractEbayErrorSummaries(error);
+    errorSummary = summarizeDocsTestError(responseBody, ebayErrors);
+    code = error instanceof EbayIntegrationError ? error.code : "PUBLISH_FAILED";
+    message =
+      code === "EBAY_INTERNAL_ERROR" && status === 500 && hasEbayErrorId(ebayErrors, 20500)
+        ? "eBay returned internal application error 20500 from the official fulfillment policy endpoint."
+        : error instanceof Error
+          ? error.message
+          : "Official docs fulfillment test failed.";
+    if (code === "EBAY_INTERNAL_ERROR" && hasEbayErrorId(ebayErrors, 20500)) {
+      errorSummary = "eBay returned internal application error 20500 from the official fulfillment policy endpoint.";
+    }
+    details = error instanceof EbayIntegrationError ? error.details ?? null : responseBody;
+  }
+
+  const responsePolicyId =
+    responseBody && typeof responseBody === "object"
+      ? ((responseBody as { fulfillmentPolicyId?: unknown }).fulfillmentPolicyId ?? null)
+      : null;
+  const responsePolicyName =
+    responseBody && typeof responseBody === "object"
+      ? ((responseBody as { name?: unknown }).name ?? null)
+      : null;
+  const fulfillmentPolicyId =
+    (typeof responsePolicyId === "string" && responsePolicyId) || extractFulfillmentPolicyIdFromLocation(locationHeader);
+
+  if (fulfillmentPolicyId) {
+    await supabase
+      .from("ebay_accounts")
+      .update({
+        fulfillment_policy_id: fulfillmentPolicyId,
+        fulfillment_policy_name: typeof responsePolicyName === "string" ? responsePolicyName : defaultPolicyNames.fulfillment,
+        last_policy_sync_at: new Date().toISOString(),
+        status: "connected"
+      })
+      .eq("id", account.id);
+  }
+
+  let syncedFulfillmentPolicyId: string | null = null;
+  if (fulfillmentPolicyId || status === 201) {
+    try {
+      const synced = await syncSellerPolicies({ supabase, userId, marketplaceId, requireAll: false });
+      syncedFulfillmentPolicyId =
+        synced.policies.fulfillmentPolicy?.fulfillmentPolicyId ??
+        (synced.account as EbayAccountRecord).fulfillment_policy_id ??
+        null;
+    } catch {
+      syncedFulfillmentPolicyId = null;
+    }
+  }
+
+  const storedPolicyId = fulfillmentPolicyId ?? syncedFulfillmentPolicyId;
+  const ok = Boolean(storedPolicyId);
+  const recommendation = ok
+    ? "Official docs sample created or synced a fulfillment policy. Continue to listing readiness and sandbox publish."
+    : timedOut
+      ? "The official eBay docs sample also timed out. This strongly suggests an eBay sandbox Account API issue or account-specific fulfillment-policy issue."
+      : "The official eBay docs sample returned a validation/API error. Review responseBody details and the eBay Developer docs sample values.";
+
+  await logAutomationEvent({
+    supabase,
+    userId,
+    level: ok ? "success" : timedOut ? "warning" : "error",
+    module: "ebay_policies",
+    message: ok ? "ebay_fulfillment_docs_test_success" : "ebay_fulfillment_docs_test_failed",
+    metadata: {
+      marketplaceId,
+      endpoint: FULFILLMENT_POLICY_CREATE_PATH,
+      status,
+      timedOut,
+      timeoutMs,
+      locationHeader,
+      fulfillmentPolicyId: storedPolicyId,
+      code,
+      message,
+      errorSummary,
+      ebayErrors,
+      recommendation
+    }
+  });
+
+  return {
+    ok,
+    schemaVariant: "official_docs_sample",
+    code,
+    message,
+    status,
+    timedOut,
+    timeoutMs,
+    endpoint,
+    requestBodyUsed,
+    responseBody,
+    locationHeader,
+    fulfillmentPolicyId: storedPolicyId,
+    details,
+    recommendation,
+    errorSummary,
+    ebayErrors
+  };
+}
+
 export async function syncSellerPolicies({
   supabase,
   userId,
@@ -1073,7 +1275,7 @@ export async function syncSellerPolicies({
       }
     });
 
-    throw new EbayIntegrationError(message, "MISSING_POLICY_ID", getEbayErrorRecommendation("MISSING_POLICY_ID"));
+    throw new EbayIntegrationError(message, "MISSING_POLICY", getEbayErrorRecommendation("MISSING_POLICY"));
   }
 
   await logAutomationEvent({
@@ -1122,6 +1324,10 @@ function buildDefaultFulfillmentPolicyBody(
   marketplaceId: string,
   attempt: FulfillmentPolicyAttempt
 ) {
+  if (attempt.schema === "official_docs_sample") {
+    return buildOfficialDocsFulfillmentPolicyBody(marketplaceId);
+  }
+
   const shippingService: Record<string, unknown> = {
     buyerResponsibleForShipping: attempt.buyerResponsibleForShipping,
     freeShipping: attempt.freeShipping,
@@ -1160,6 +1366,36 @@ function buildDefaultFulfillmentPolicyBody(
   };
 }
 
+function buildOfficialDocsFulfillmentPolicyBody(marketplaceId: string) {
+  return {
+    categoryTypes: [
+      {
+        name: "ALL_EXCLUDING_MOTORS_VEHICLES"
+      }
+    ],
+    marketplaceId,
+    name: defaultPolicyNames.fulfillment,
+    handlingTime: {
+      unit: "DAY",
+      value: "1"
+    },
+    shippingOptions: [
+      {
+        costType: "FLAT_RATE",
+        optionType: "DOMESTIC",
+        shippingServices: [
+          {
+            buyerResponsibleForShipping: "false",
+            freeShipping: "true",
+            shippingCarrierCode: "USPS",
+            shippingServiceCode: "USPSPriorityFlatRateBox"
+          }
+        ]
+      }
+    ]
+  };
+}
+
 function buildFulfillmentPolicyAttempts(candidates: EbayShippingService[]): FulfillmentPolicyAttempt[] {
   const usableCandidates = candidates.length
     ? candidates
@@ -1175,6 +1411,16 @@ function buildFulfillmentPolicyAttempts(candidates: EbayShippingService[]): Fulf
       ];
   const attempts: FulfillmentPolicyAttempt[] = [];
   const uspsFirstClass = usableCandidates.find((candidate) => candidate.shippingService === "USPSFirstClass");
+
+  attempts.push({
+    attemptNumber: attempts.length + 1,
+    schema: "official_docs_sample",
+    shippingServiceCode: "USPSPriorityFlatRateBox",
+    shippingCarrierCode: "USPS",
+    includeShippingCost: false,
+    freeShipping: "true",
+    buyerResponsibleForShipping: "false"
+  });
 
   if (uspsFirstClass) {
     attempts.push({
@@ -1267,6 +1513,17 @@ function buildStepFulfillmentPolicyAttempts(candidates: EbayShippingService[]): 
       additionalShippingCostValue: schema === "buyer_paid_minimal" ? "0.00" : undefined
     });
   };
+  const pushDocsAttempt = () => {
+    attempts.push({
+      attemptNumber: attempts.length + 1,
+      schema: "official_docs_sample",
+      shippingServiceCode: "USPSPriorityFlatRateBox",
+      shippingCarrierCode: "USPS",
+      includeShippingCost: false,
+      freeShipping: "true",
+      buyerResponsibleForShipping: "false"
+    });
+  };
 
   pushAttempt("USPSFirstClass", "free_shipping_minimal");
   pushAttempt("USPSFirstClass", "buyer_paid_minimal");
@@ -1274,7 +1531,7 @@ function buildStepFulfillmentPolicyAttempts(candidates: EbayShippingService[]): 
   pushAttempt("USPSPriority", "buyer_paid_minimal");
   pushAttempt("UPSGround", "buyer_paid_minimal");
   pushAttempt("FedExHomeDelivery", "buyer_paid_minimal");
-  pushAttempt("USPSPriorityFlatRateBox", "free_shipping_minimal");
+  pushDocsAttempt();
 
   for (const candidate of candidates) {
     if (!candidate.shippingService || preferredCodes.includes(candidate.shippingService)) {
@@ -1480,6 +1737,8 @@ function isRetryablePolicyCreateError(error: unknown) {
   return (
     error instanceof EbayIntegrationError &&
     (error.status === 400 ||
+      error.code === "EBAY_TIMEOUT" ||
+      error.code === "EBAY_INTERNAL_ERROR" ||
       error.code === "INVALID_SHIPPING_SERVICE" ||
       error.code === "FULFILLMENT_POLICY_CREATE_FAILED" ||
       Boolean(error.status && error.status >= 500))
@@ -1489,11 +1748,16 @@ function isRetryablePolicyCreateError(error: unknown) {
 function summarizePolicyCreateError(error: unknown): PolicyCreateErrorSummary {
   if (error instanceof EbayIntegrationError) {
     const isFulfillmentFailure =
-      error.code === "FULFILLMENT_POLICY_CREATE_FAILED" || hasFulfillmentPolicyAttemptDetails(error.details);
+      error.code === "FULFILLMENT_POLICY_CREATE_FAILED" ||
+      error.code === "EBAY_TIMEOUT" ||
+      error.code === "EBAY_INTERNAL_ERROR" ||
+      hasFulfillmentPolicyAttemptDetails(error.details);
     const code = error.code === "PUBLISH_FAILED" && isFulfillmentFailure ? "FULFILLMENT_POLICY_CREATE_FAILED" : error.code;
     const message =
-      isFulfillmentFailure && hasFulfillmentPolicyTimeout(error.details)
+      isFulfillmentFailure && (error.code === "EBAY_TIMEOUT" || hasFulfillmentPolicyTimeout(error.details))
         ? "eBay sandbox timed out while creating the fulfillment policy. Try again; if it repeats, inspect Policy creation details."
+      : code === "EBAY_INTERNAL_ERROR"
+        ? "eBay returned an internal application error while creating the fulfillment policy."
       : code === "INVALID_SHIPPING_SERVICE"
         ? "Invalid shipping service code for fulfillment policy. The app will retry with another sandbox-safe service."
         : error.message;
@@ -1595,7 +1859,7 @@ function isFulfillmentPolicyTimeoutError(error: unknown): boolean {
   const details = error.details;
 
   return (
-    error.code === "FULFILLMENT_POLICY_CREATE_FAILED" &&
+    (error.code === "EBAY_TIMEOUT" || error.code === "FULFILLMENT_POLICY_CREATE_FAILED") &&
     Boolean(details && typeof details === "object" && "timeoutMs" in details)
   );
 }
@@ -1605,7 +1869,7 @@ function extractEbayErrorSummaries(error: unknown) {
     return [];
   }
 
-  const payload = error.details;
+  const payload = extractEbayErrorPayload(error.details);
 
   if (!payload || typeof payload !== "object" || !("errors" in payload)) {
     return [];
@@ -1621,6 +1885,7 @@ function extractEbayErrorSummaries(error: unknown) {
     const record = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
     return {
       errorId: record.errorId,
+      message: record.message,
       longMessage: record.longMessage,
       parameters: Array.isArray(record.parameters)
         ? record.parameters.map((param) => {
@@ -1635,13 +1900,38 @@ function extractEbayErrorSummaries(error: unknown) {
   });
 }
 
+function extractEbayErrorPayload(details: unknown): unknown {
+  if (!details || typeof details !== "object") {
+    return details;
+  }
+
+  if ("errors" in details) {
+    return details;
+  }
+
+  if ("responseBody" in details) {
+    return extractEbayErrorPayload((details as { responseBody?: unknown }).responseBody);
+  }
+
+  if ("details" in details) {
+    return extractEbayErrorPayload((details as { details?: unknown }).details);
+  }
+
+  return details;
+}
+
 function extractSafeEbayResponse(error: unknown) {
   if (error instanceof EbayIntegrationError) {
+    const responseBody =
+      error.details && typeof error.details === "object" && "responseBody" in error.details
+        ? (error.details as { responseBody?: unknown }).responseBody
+        : error.details;
+
     return {
       code: error.code,
-      status: error.status,
+      status: extractStatusFromEbayError(error),
       message: error.message,
-      details: error.details ?? null
+      details: responseBody ?? null
     };
   }
 
@@ -1650,6 +1940,65 @@ function extractSafeEbayResponse(error: unknown) {
       name: error.name,
       message: error.message
     };
+  }
+
+  return null;
+}
+
+function extractStatusFromEbayError(error: EbayIntegrationError) {
+  if (error.status) {
+    return error.status;
+  }
+
+  const details = error.details;
+  if (details && typeof details === "object" && "status" in details) {
+    const status = Number((details as { status?: unknown }).status);
+    return Number.isFinite(status) ? status : null;
+  }
+
+  return null;
+}
+
+function extractLocationHeaderFromEbayError(error: EbayIntegrationError) {
+  const details = error.details;
+
+  if (details && typeof details === "object" && "locationHeader" in details) {
+    const value = (details as { locationHeader?: unknown }).locationHeader;
+    return typeof value === "string" ? value : null;
+  }
+
+  return null;
+}
+
+function hasEbayErrorId(ebayErrors: ReturnType<typeof extractEbayErrorSummaries>, expected: number) {
+  return ebayErrors.some((error) => String(error.errorId) === String(expected));
+}
+
+function extractFulfillmentPolicyIdFromLocation(locationHeader: string | null) {
+  if (!locationHeader) {
+    return null;
+  }
+
+  const match = locationHeader.match(/fulfillment_policy\/([^/?#]+)/i);
+
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+function summarizeDocsTestError(
+  responseBody: unknown,
+  ebayErrors: ReturnType<typeof extractEbayErrorSummaries>
+) {
+  const firstLongMessage = ebayErrors
+    .map((error) => error.longMessage ?? error.message)
+    .find((message): message is string => typeof message === "string" && message.trim().length > 0);
+
+  if (firstLongMessage) {
+    return firstLongMessage;
+  }
+
+  if (responseBody && typeof responseBody === "object" && "message" in responseBody) {
+    const message = (responseBody as { message?: unknown }).message;
+    return typeof message === "string" ? message : null;
   }
 
   return null;

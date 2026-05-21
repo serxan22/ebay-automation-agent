@@ -101,10 +101,14 @@ export async function publishListingDraftToEbaySandbox({
         }
       });
 
+      const fulfillmentMissing = readiness.missing.some((item) => /fulfillment policy/i.test(item));
+
       throw new EbayIntegrationError(
-        `Cannot publish yet: missing ${readiness.missing.join(", ")}.`,
-        "PUBLISH_READINESS_FAILED",
-        getEbayErrorRecommendation("PUBLISH_READINESS_FAILED"),
+        fulfillmentMissing
+          ? "Cannot publish: fulfillment policy missing."
+          : `Cannot publish yet: missing ${readiness.missing.join(", ")}.`,
+        fulfillmentMissing ? "MISSING_POLICY" : "PUBLISH_READINESS_FAILED",
+        getEbayErrorRecommendation(fulfillmentMissing ? "MISSING_POLICY" : "PUBLISH_READINESS_FAILED"),
         readiness
       );
     }
@@ -145,9 +149,9 @@ export async function publishListingDraftToEbaySandbox({
 
     if (!account.fulfillment_policy_id && isSandboxPolicyFallbackAllowed()) {
       throw new EbayIntegrationError(
-        "Sandbox policy fallback is enabled, so readiness and inventory item creation diagnostics can run. Offer publish is blocked until fulfillment policy exists.",
-        "MISSING_POLICY_ID",
-        "Run step-based fulfillment retry in Settings, then sync seller policies."
+        "Sandbox fallback is enabled for diagnostics, but real offer publish is blocked until a real fulfillment policy exists.",
+        "MISSING_POLICY",
+        "Run the official docs fulfillment test. If eBay returns 20500, continue draft/demo workflow and keep publish blocked."
       );
     }
 
@@ -310,7 +314,7 @@ function getConciseEbayErrorMessage(error: EbayIntegrationError) {
     return "Invalid shipping service code for fulfillment policy. The app will retry with another sandbox-safe service.";
   }
 
-  if (error.code === "SELLING_POLICY_NOT_OPTED_IN") {
+  if (error.code === "BUSINESS_POLICY_NOT_ELIGIBLE" || error.code === "SELLING_POLICY_NOT_OPTED_IN") {
     return "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again.";
   }
 
@@ -387,10 +391,10 @@ function validateAccountForPublish(account: EbayAccountRecord) {
   if (!hasRequiredSellerSetup(account) && !missingFulfillmentOnly) {
     throw new EbayIntegrationError(
       "eBay sandbox seller setup is incomplete.",
-      !account.inventory_location_key ? "MISSING_LOCATION" : "MISSING_POLICY_ID",
+      !account.inventory_location_key ? "MISSING_LOCATION" : "MISSING_POLICY",
       !account.inventory_location_key
         ? getEbayErrorRecommendation("MISSING_LOCATION")
-        : getEbayErrorRecommendation("MISSING_POLICY_ID")
+        : getEbayErrorRecommendation("MISSING_POLICY")
     );
   }
 }

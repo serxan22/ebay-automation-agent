@@ -18,7 +18,7 @@ export interface EbayOfferInput {
 
 export async function createOffer(accessToken: string, input: EbayOfferInput) {
   if (!input.paymentPolicyId || !input.returnPolicyId || !input.fulfillmentPolicyId) {
-    throw new EbayIntegrationError("Required eBay policy IDs are missing.", "MISSING_POLICY_ID");
+    throw new EbayIntegrationError("Required eBay policy IDs are missing.", "MISSING_POLICY");
   }
 
   if (!input.merchantLocationKey) {

@@ -31,7 +31,8 @@ export async function POST() {
     }
 
     const normalized = normalizePublishError(error);
-    const isSellingPolicyOptInError = normalized.code === "SELLING_POLICY_NOT_OPTED_IN";
+    const isSellingPolicyOptInError =
+      normalized.code === "BUSINESS_POLICY_NOT_ELIGIBLE" || normalized.code === "SELLING_POLICY_NOT_OPTED_IN";
     const sellingPolicyOptInMessage =
       "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again.";
 
@@ -53,11 +54,14 @@ export async function POST() {
 
     return NextResponse.json(
       {
+        ok: false,
         error: isSellingPolicyOptInError ? sellingPolicyOptInMessage : normalized.message,
+        message: isSellingPolicyOptInError ? sellingPolicyOptInMessage : normalized.message,
         code: normalized.code,
         recommendation:
           (isSellingPolicyOptInError ? sellingPolicyOptInMessage : normalized.recommendation) ??
-          "Make sure the sandbox seller is opted into Business Policies and has payment, return, and fulfillment policies."
+          "Make sure the sandbox seller is opted into Business Policies and has payment, return, and fulfillment policies.",
+        details: normalized.details
       },
       { status: 400 }
     );

@@ -84,6 +84,15 @@ function createFallbackListing(
     `Ships based on supplier-confirmed handling time of ${product.shippingDays} days`,
     "Listing content uses supplier-provided facts only"
   ];
+  const itemSpecifics: Record<string, string> = {
+    Type: category,
+    Condition: "New",
+    "Country/Region of Manufacture": product.countryOfOrigin ?? "Not specified"
+  };
+
+  if (product.brand?.trim()) {
+    itemSpecifics.Brand = product.brand.trim();
+  }
 
   return {
     ebayTitle: title,
@@ -92,18 +101,16 @@ function createFallbackListing(
         <h2>${escapeHtml(title)}</h2>
         <p>${escapedDescription}</p>
         <ul>${bulletPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>
+        <h3>Key Features</h3>
+        <ul>${bulletPoints.slice(0, 3).map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>
+        <p><strong>Package Includes:</strong> Item shown in the supplier listing.</p>
         <p><strong>Shipping:</strong> ${escapeHtml(`Estimated handling time is based on the supplier feed: ${product.shippingDays} days.`)}</p>
         <p><strong>Returns:</strong> Returns follow the seller's active eBay return policy.</p>
         <p><strong>Seller note:</strong> Product details are reviewed against supplier data before approval.</p>
       </section>
     `.trim(),
     bulletPoints,
-    itemSpecifics: {
-      Brand: product.brand?.trim() || "Unbranded",
-      Type: category,
-      Condition: "New",
-      "Country/Region of Manufacture": product.countryOfOrigin ?? "Not specified"
-    },
+    itemSpecifics,
     categorySuggestion: category,
     seoKeywords: deriveKeywords(product),
     shippingNote: `Estimated handling and shipping time is based on the supplier feed: ${product.shippingDays} days.`,

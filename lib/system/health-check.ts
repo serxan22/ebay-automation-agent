@@ -30,6 +30,9 @@ export interface SystemHealthSummary {
   };
   lastAutomationError: string | null;
   lastEbayError: string | null;
+  lastBlockingIssue: string | null;
+  publishReadiness: string;
+  nextAction: string;
   suggestedNextAction: string;
 }
 
@@ -52,7 +55,7 @@ export async function getSystemHealth({
   if (!user) {
     checks.push({
       key: "auth",
-      label: "Authenticated user",
+      label: "Auth",
       status: "missing",
       message: "Sign in before running automation.",
       nextAction: "Log in to the dashboard."
@@ -68,7 +71,7 @@ export async function getSystemHealth({
 
   checks.push({
     key: "auth",
-    label: "Authenticated user",
+    label: "Auth",
     status: "ready",
     message: user.email ? `Signed in as ${user.email}.` : "Signed in."
   });
@@ -120,7 +123,7 @@ export async function getSystemHealth({
   const aiStatus = getTelegramAiParserStatus();
   checks.push({
     key: "ai",
-    label: "AI parser",
+    label: "AI provider",
     status: aiStatus.active ? "ready" : "attention",
     message: aiStatus.active ? aiStatus.label : "No AI key configured; deterministic fallback parser is active.",
     nextAction: aiStatus.active ? undefined : "Add GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY for richer Telegram parsing."
@@ -260,7 +263,7 @@ async function addEbayChecks({
       "fulfillment_policy",
       "Fulfillment policy",
       account?.fulfillment_policy_id,
-      "Click Retry next fulfillment attempt, or enable ALLOW_SANDBOX_POLICY_FALLBACK for sandbox diagnostics only."
+      "Run docs fulfillment test. If it returns 20500, report eBay sandbox Account API issue. Continue draft/demo workflow; publish remains blocked."
     )
   );
   checks.push({
@@ -297,6 +300,7 @@ function buildSummary({
   const hasAttention = checks.some((check) => check.status === "attention");
   const status: HealthSeverity = hasMissing ? "missing" : hasAttention ? "attention" : "ready";
   const next = checks.find((check) => check.status !== "ready" && check.nextAction);
+  const blocker = checks.find((check) => check.status === "missing") ?? checks.find((check) => check.status === "attention") ?? null;
 
   return {
     status,
@@ -305,6 +309,12 @@ function buildSummary({
     counts,
     lastAutomationError,
     lastEbayError,
+    lastBlockingIssue: blocker?.message ?? null,
+    publishReadiness:
+      status === "ready"
+        ? "Sandbox publish prerequisites are ready. Production publish remains locked."
+        : "Sandbox publish is blocked until missing requirements are fixed.",
+    nextAction: next?.nextAction ?? "System is ready for sandbox automation.",
     suggestedNextAction: next?.nextAction ?? "System is ready for sandbox automation."
   };
 }

@@ -9,6 +9,7 @@ export async function GET() {
     const account = await getEbayAccount({ supabase, userId: user.id });
 
     return NextResponse.json({
+      ok: true,
       connected: account?.status === "connected",
       account: account
         ? {
@@ -40,7 +41,15 @@ export async function GET() {
     }
 
     return NextResponse.json(
-      { connected: false, error: error instanceof Error ? error.message : "Unable to load eBay status." },
+      {
+        ok: false,
+        connected: false,
+        error: error instanceof Error ? error.message : "Unable to load eBay status.",
+        message: error instanceof Error ? error.message : "Unable to load eBay status.",
+        code: "EBAY_STATUS_FAILED",
+        recommendation: "Reconnect sandbox OAuth or inspect Settings diagnostics.",
+        details: null
+      },
       { status: 400 }
     );
   }

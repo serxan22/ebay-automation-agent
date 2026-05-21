@@ -2,7 +2,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
 import { getEbayAccount, getValidEbayAccessToken } from "@/lib/ebay/account";
 import { ensureInventoryLocation } from "@/lib/ebay/locations";
-import { createDefaultSellerPolicies, retryFulfillmentPolicyStep, syncSellerPolicies } from "@/lib/ebay/policies";
+import {
+  createDefaultSellerPolicies,
+  retryFulfillmentPolicyStep,
+  runFulfillmentPolicyDocsTest,
+  syncSellerPolicies
+} from "@/lib/ebay/policies";
 import { publishListingDraftToEbaySandbox } from "@/lib/ebay/publish";
 import { discoverShippingServicesWithFallback, getPreferredDomesticShippingServices } from "@/lib/ebay/shipping-services";
 import { getConfiguredAiProvider } from "@/lib/ai";
@@ -162,6 +167,8 @@ export async function executeTelegramIntentAction({
       return showEbayReadiness({ supabase, userId });
     case "DISCOVER_SHIPPING_SERVICES":
       return discoverShippingServicesFromTelegram({ supabase, userId });
+    case "RUN_FULFILLMENT_DOCS_TEST":
+      return runFulfillmentDocsTestFromTelegram({ supabase, userId });
     case "RETRY_FULFILLMENT_STEP":
       return retryFulfillmentStepFromTelegram({
         supabase,
@@ -422,13 +429,14 @@ async function enableTestMode({ supabase, userId }: ActionContext) {
 }
 
 async function findProducts({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
+  const limit = clampBatchQuantity(quantity, 50);
   const { data, error } = await supabase
     .from("supplier_products")
     .select("id,title,category,stock_quantity,shipping_days")
     .eq("user_id", userId)
     .gt("stock_quantity", 0)
     .order("created_at", { ascending: false })
-    .limit(quantity);
+    .limit(limit);
 
   if (error) {
     throw new Error(error.message);
@@ -446,8 +454,9 @@ async function findProducts({ supabase, userId, quantity }: ActionContext & { qu
 }
 
 async function analyzeProducts({ supabase, userId, quantity }: ActionContext & { quantity: number }) {
+  const limit = clampBatchQuantity(quantity, 25);
   const settings = await getAutomationSettings(supabase, userId);
-  const { products, suppliers } = await loadProductsForAction({ supabase, userId, limit: quantity });
+  const { products, suppliers } = await loadProductsForAction({ supabase, userId, limit });
 
   if (!products.length) {
     return { ok: true, message: "No supplier products available for analysis." };
@@ -518,6 +527,7 @@ async function createListingDrafts({
   minMarginPercentage?: number;
   minProfitAmount?: number;
 }) {
+  const limit = clampBatchQuantity(quantity, 25);
   const savedSettings = await getAutomationSettings(supabase, userId);
   const settings = {
     ...savedSettings,
@@ -528,8 +538,11 @@ async function createListingDrafts({
   let draftsCreated = 0;
   let rejected = 0;
   let approved = 0;
+  let publishedSandbox = 0;
   const rejectionCounts = new Map<string, number>();
   const failures: string[] = [];
+  const createdDraftIds: string[] = [];
+  const autoApprovedDraftIds: string[] = [];
 
   await logAutomationEvent({
     supabase,
@@ -542,8 +555,8 @@ async function createListingDrafts({
 
   const candidates =
     source === "approved_products"
-      ? await loadApprovedAnalysisCandidates({ supabase, userId, limit: quantity })
-      : await analyzeLatestProductsForDrafts({ supabase, userId, settings, limit: quantity });
+      ? await loadApprovedAnalysisCandidates({ supabase, userId, limit })
+      : await analyzeLatestProductsForDrafts({ supabase, userId, settings, limit });
 
   if (!candidates.length) {
     return {
@@ -575,9 +588,20 @@ async function createListingDrafts({
 
     if (created.ok) {
       draftsCreated += 1;
+      createdDraftIds.push(created.draftId);
+      if (created.status === "approved") {
+        autoApprovedDraftIds.push(created.draftId);
+      }
     } else {
       failures.push(created.reason);
     }
+  }
+
+  let publishBlockReason = "";
+  if (settings.approvalMode === "trusted_auto" && autoApprovedDraftIds.length > 0) {
+    const publishResult = await publishTrustedAutoDraftsSandbox({ supabase, userId, draftIds: autoApprovedDraftIds });
+    publishedSandbox = publishResult.published;
+    publishBlockReason = publishResult.blockedReason ?? "";
   }
 
   await logAutomationEvent({
@@ -591,6 +615,8 @@ async function createListingDrafts({
       approved,
       rejected,
       draftsCreated,
+      publishedSandbox,
+      publishBlockReason,
       failures
     }
   });
@@ -601,9 +627,60 @@ async function createListingDrafts({
   return {
     ok: failures.length === 0 || draftsCreated > 0,
     message: `${candidates.length} products analyzed: ${approved} approved, ${rejected} rejected. ${draftsCreated} listing drafts created.${
+      publishedSandbox ? ` ${publishedSandbox} published to sandbox.` : ""
+    }${
+      settings.approvalMode === "manual" && draftsCreated
+        ? "\nManual approval mode is active. Review and approve drafts before sandbox publish."
+        : ""
+    }${
+      publishBlockReason ? `\n${publishBlockReason}` : ""
+    }${
       reasons ? `\nReasons:\n${reasons}` : ""
     }${failureSummary}`
   };
+}
+
+async function publishTrustedAutoDraftsSandbox({
+  supabase,
+  userId,
+  draftIds
+}: ActionContext & {
+  draftIds: string[];
+}) {
+  const account = await getEbayAccount({ supabase, userId, marketplace: "EBAY_US" });
+
+  if (!account?.fulfillment_policy_id) {
+    return {
+      published: 0,
+      blockedReason: [
+        "Drafts are ready, but sandbox publish is blocked because fulfillment policy is missing.",
+        isSandboxPolicyFallbackAllowed()
+          ? "Sandbox fallback is enabled for diagnostics, but real offer publish is blocked until a real fulfillment policy exists."
+          : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    };
+  }
+
+  if (!account.payment_policy_id || !account.return_policy_id || !account.inventory_location_key) {
+    return {
+      published: 0,
+      blockedReason: "Drafts are ready, but sandbox publish is blocked because seller policy or inventory location setup is incomplete."
+    };
+  }
+
+  let published = 0;
+  for (const draftId of draftIds.slice(0, 10)) {
+    try {
+      await publishListingDraftToEbaySandbox({ supabase, userId, draftId });
+      published += 1;
+    } catch {
+      // Individual publish failures are recorded on the draft by publishListingDraftToEbaySandbox.
+    }
+  }
+
+  return { published, blockedReason: published ? null : "Trusted auto publish found no fully ready sandbox drafts." };
 }
 
 async function analyzeLatestProductsForDrafts({
@@ -748,7 +825,7 @@ async function createDraftFromCandidate({
 }: ActionContext & {
   settings: AutomationSettings;
   candidate: DraftCandidate;
-}): Promise<{ ok: true; draftId: string } | { ok: false; reason: string }> {
+}): Promise<{ ok: true; draftId: string; status: "draft" | "approved" } | { ok: false; reason: string }> {
   const reason = validateDraftCandidate(candidate);
 
   if (reason) {
@@ -758,6 +835,20 @@ async function createDraftFromCandidate({
 
   try {
     const generated = await generateListingForDraft(candidate.product, candidate.analysis);
+    const imageResult = await optimizeProductImages({
+      imageUrls: candidate.product.imageUrls,
+      userId,
+      supplierProductId: candidate.product.id,
+      store: isSupabaseImageStorageConfigured(),
+      maxImages: 8
+    });
+
+    if (!imageResult.optimizedUrls.length) {
+      const imageReason = imageResult.rejected[0]?.reason ?? "no valid image URLs";
+      await logDraftCreationFailed({ supabase, userId, candidate, reason: imageReason });
+      return { ok: false, reason: imageReason };
+    }
+
     const ebayCategoryId = /^\d+$/.test(generated.categorySuggestion) ? generated.categorySuggestion : null;
     const draft = createListingDraft({
       product: candidate.product,
@@ -767,7 +858,7 @@ async function createDraftFromCandidate({
         itemSpecifics: generated.itemSpecifics ?? {}
       },
       settings,
-      optimizedImageUrls: candidate.product.imageUrls,
+      optimizedImageUrls: imageResult.optimizedUrls,
       analysisId: candidate.analysisId
     });
     const fallbackUsed = generated.warnings.includes("Safe fallback listing content was used.");
@@ -812,12 +903,20 @@ async function createDraftFromCandidate({
       }
     });
 
-    return { ok: true, draftId: data.id as string };
+    return { ok: true, draftId: data.id as string, status: draftStatus === "approved" ? "approved" : "draft" };
   } catch (error) {
     const failureReason = error instanceof Error ? error.message : "draft_creation_failed";
     await logDraftCreationFailed({ supabase, userId, candidate, reason: failureReason });
     return { ok: false, reason: failureReason };
   }
+}
+
+function isSupabaseImageStorageConfigured() {
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function isSandboxPolicyFallbackAllowed() {
+  return process.env.EBAY_ENVIRONMENT !== "production" && process.env.ALLOW_SANDBOX_POLICY_FALLBACK === "true";
 }
 
 function validateDraftCandidate(candidate: DraftCandidate) {
@@ -1079,7 +1178,14 @@ async function showEbayReadiness({ supabase, userId }: ActionContext) {
       `eBay sandbox: ${account?.status === "connected" ? "connected" : account?.status ?? "disconnected"} (${account?.marketplace ?? "EBAY_US"}).`,
       `Policies: ${policiesReady ? "ready" : "missing"}. Inventory location: ${locationReady ? "ready" : "missing"}.`,
       `Draft readiness: ${readyCount}/${rows.length} recent drafts ready to publish.`,
-      firstMissing.length ? `Next fixes: ${firstMissing.join(", ")}.` : "Next action: approved ready drafts can be published to sandbox.",
+      !account?.fulfillment_policy_id
+        ? "Next action: Run docs fulfillment test. If it returns 20500, report eBay sandbox Account API issue; draft/demo workflow can continue but publish remains blocked."
+        : firstMissing.length
+          ? `Next fixes: ${firstMissing.join(", ")}.`
+          : "Next action: approved ready drafts can be published to sandbox.",
+      !account?.fulfillment_policy_id && isSandboxPolicyFallbackAllowed()
+        ? "Sandbox fallback is enabled for diagnostics, but real offer publish is blocked until a real fulfillment policy exists."
+        : "",
       lastFailed ? `Last publish error: ${lastFailed.ebay_error_code ?? "ERROR"} ${lastFailed.error_message ?? ""}` : ""
     ]
       .filter(Boolean)
@@ -1110,6 +1216,31 @@ async function discoverShippingServicesFromTelegram({ supabase, userId }: Action
       message: error instanceof Error ? error.message : "Shipping service discovery failed."
     };
   }
+}
+
+async function runFulfillmentDocsTestFromTelegram({ supabase, userId }: ActionContext) {
+  const result = await runFulfillmentPolicyDocsTest({ supabase, userId, marketplaceId: "EBAY_US" });
+
+  return {
+    ok: result.ok,
+    message: [
+      `Docs fulfillment test: ${result.ok ? "success" : result.timedOut ? "timeout" : "failed"}.`,
+      `schemaVariant: ${result.schemaVariant}. endpoint: ${result.endpoint}. status: ${result.status ?? "null"}.`,
+      result.fulfillmentPolicyId ? `Fulfillment policy stored: ${result.fulfillmentPolicyId}.` : "",
+      result.locationHeader ? `Location: ${result.locationHeader}.` : "",
+      result.code === "EBAY_INTERNAL_ERROR"
+        ? "eBay returned internal application error 20500 from the official fulfillment policy endpoint."
+        : result.errorSummary || result.message
+          ? `eBay response: ${result.errorSummary ?? result.message}.`
+          : "",
+      result.ok
+        ? "Sandbox publish can continue after readiness checks."
+        : "Sandbox fallback is enabled for diagnostics only if configured; real offer publish is blocked until a real fulfillment policy exists.",
+      `Next: ${result.recommendation}`
+    ]
+      .filter(Boolean)
+      .join("\n")
+  };
 }
 
 async function retryFulfillmentStepFromTelegram({
@@ -1213,7 +1344,7 @@ async function explainFulfillmentFailureFromTelegram({ supabase, userId }: Actio
         : "",
       `Readiness: payment ${paymentReady ? "ready" : "missing"}, return ${returnReady ? "ready" : "missing"}, inventory location ${locationReady ? "ready" : "missing"}.`,
       !fulfillmentReady
-        ? "Offer publish is blocked until a real fulfillment policy ID exists. You can run Settings -> Run long fulfillment test for a final 45 second proof, or enable ALLOW_SANDBOX_POLICY_FALLBACK only for readiness/inventory diagnostics."
+        ? "Offer publish is blocked until a real fulfillment policy ID exists. Run the official docs fulfillment test; if it returns 20500, report eBay sandbox Account API issue and continue draft/demo workflow only."
         : ""
     ]
       .filter(Boolean)
@@ -1294,6 +1425,21 @@ async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionCo
 
   const account = await getEbayAccount({ supabase, userId });
   const rows = (data ?? []) as Array<Record<string, any>>;
+
+  if (!account?.fulfillment_policy_id) {
+    return {
+      ok: false,
+      message: [
+        "Drafts are ready, but sandbox publish is blocked because fulfillment policy is missing.",
+        isSandboxPolicyFallbackAllowed()
+          ? "Sandbox fallback is enabled for diagnostics, but real offer publish is blocked until a real fulfillment policy exists."
+          : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    };
+  }
+
   const readiness = await Promise.all(rows.map((draft) => validateListingReadiness({ draft, account })));
   const readyDrafts = rows.filter((_, index) => readiness[index]?.ready);
 
@@ -1309,19 +1455,23 @@ async function publishSafeDraftsSandbox({ supabase, userId, quantity }: ActionCo
 
   let published = 0;
   let failed = 0;
+  const failureReasons: string[] = [];
 
   for (const draft of readyDrafts as Array<{ id: string }>) {
     try {
       await publishListingDraftToEbaySandbox({ supabase, userId, draftId: draft.id });
       published += 1;
-    } catch {
+    } catch (error) {
       failed += 1;
+      failureReasons.push(error instanceof Error ? error.message : "Publish failed.");
     }
   }
 
   return {
     ok: failed === 0,
-    message: `Sandbox publish finished: ${published} published, ${failed} failed. Production eBay publishing remains disabled.`
+    message: `Sandbox publish finished: ${published} published, ${failed} failed. Production eBay publishing remains disabled.${
+      failureReasons.length ? `\nFailures:\n${failureReasons.slice(0, 5).map((reason) => `- ${reason}`).join("\n")}` : ""
+    }`
   };
 }
 
@@ -1443,6 +1593,8 @@ async function optimizeImagesFromTelegram({ supabase, userId, quantity }: Action
 
   let updated = 0;
   let rejected = 0;
+  const warnings = new Set<string>();
+  const storeImages = isSupabaseImageStorageConfigured();
 
   for (const row of (data ?? []) as Array<Record<string, any>>) {
     const product = getEmbeddedRow(row.supplier_products);
@@ -1455,11 +1607,14 @@ async function optimizeImagesFromTelegram({ supabase, userId, quantity }: Action
       imageUrls: sourceUrls,
       userId,
       supplierProductId: row.supplier_product_id as string,
-      store: false,
+      store: storeImages,
       maxImages: 8
     });
 
     rejected += result.rejected.length;
+    for (const warning of result.warnings) {
+      warnings.add(warning);
+    }
 
     if (result.optimizedUrls.length) {
       const { error: updateError } = await supabase
@@ -1476,7 +1631,9 @@ async function optimizeImagesFromTelegram({ supabase, userId, quantity }: Action
 
   return {
     ok: updated > 0,
-    message: `${updated} drafts now have validated image URLs. ${rejected} image URLs rejected. Storage upload is left off unless configured later.`
+    message: `${updated} drafts now have validated image URLs. ${rejected} image URLs rejected.${
+      warnings.size ? `\n${Array.from(warnings).join("\n")}` : ""
+    }`
   };
 }
 
@@ -1810,6 +1967,10 @@ function mapProductAnalysis(row: Record<string, any>): ProductAnalysis {
 function getNumber(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function clampBatchQuantity(value: number, max: number) {
+  return Math.min(Math.max(Math.floor(value || 1), 1), max);
 }
 
 function getString(value: unknown) {

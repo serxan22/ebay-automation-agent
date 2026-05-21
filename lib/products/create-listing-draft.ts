@@ -63,7 +63,10 @@ export function createSafeFallbackListingGeneration(
     ebayTitle: title,
     ebayDescription: `<section><h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p><ul>${bulletPoints
       .map((point) => `<li>${escapeHtml(point)}</li>`)
-      .join("")}</ul><p><strong>Shipping:</strong> Estimated handling time is based on supplier data.</p><p><strong>Returns:</strong> Returns follow the seller's active eBay return policy.</p></section>`,
+      .join("")}</ul><h3>Key Features</h3><ul>${bulletPoints
+      .slice(0, 3)
+      .map((point) => `<li>${escapeHtml(point)}</li>`)
+      .join("")}</ul><p><strong>Package Includes:</strong> Item shown in the supplier listing.</p><p><strong>Shipping:</strong> Estimated handling time is based on supplier data.</p><p><strong>Returns:</strong> Returns follow the seller's active return policy.</p></section>`,
     bulletPoints,
     itemSpecifics: {
       ...(product.brand ? { Brand: product.brand } : {}),

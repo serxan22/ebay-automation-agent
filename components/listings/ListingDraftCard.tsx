@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BadgeCheck, CircleAlert, FileText, Save, X } from "lucide-react";
+import { BadgeCheck, CircleAlert, FileText, Save, WandSparkles, X } from "lucide-react";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { PublishDraftButton } from "@/components/listings/PublishDraftButton";
 import { Button } from "@/components/ui/Button";
@@ -13,6 +13,8 @@ type Feedback = {
   text: string;
   tone: "success" | "error" | "info";
 };
+
+const CLIENT_LISTING_ACTION_TIMEOUT_MS = 20_000;
 
 export function ListingDraftCard({
   draft,
@@ -53,21 +55,58 @@ export function ListingDraftCard({
     setLoading(true);
     setFeedback(null);
 
-    const response = await fetch("/api/listings/drafts", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "approve", draftId: draft.id })
-    });
-    const payload = (await response.json()) as { ok?: boolean; error?: string; message?: string };
+    try {
+      const response = await fetchWithTimeout("/api/listings/drafts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve", draftId: draft.id })
+      });
+      const payload = (await response.json()) as { ok?: boolean; error?: string; message?: string };
 
-    setLoading(false);
-    setFeedback({
-      text: payload.ok ? payload.message ?? "Draft approved." : payload.error ?? "Approve failed.",
-      tone: payload.ok ? "success" : "error"
-    });
+      setFeedback({
+        text: payload.ok ? payload.message ?? "Draft approved." : payload.error ?? "Approve failed.",
+        tone: payload.ok ? "success" : "error"
+      });
 
-    if (payload.ok) {
-      router.refresh();
+      if (payload.ok) {
+        router.refresh();
+      }
+    } catch (error) {
+      setFeedback({ text: getClientErrorMessage(error), tone: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function regenerateListingCopy() {
+    if (!draft.id) {
+      setFeedback({ text: "This draft is not saved in Supabase yet.", tone: "error" });
+      return;
+    }
+
+    setLoading(true);
+    setFeedback(null);
+
+    try {
+      const response = await fetchWithTimeout("/api/listings/drafts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "regenerate_copy", draftId: draft.id })
+      });
+      const payload = (await response.json()) as { ok?: boolean; error?: string; message?: string };
+
+      setFeedback({
+        text: payload.ok ? payload.message ?? "Listing copy regenerated." : payload.error ?? "Regenerate failed.",
+        tone: payload.ok ? "success" : "error"
+      });
+
+      if (payload.ok) {
+        router.refresh();
+      }
+    } catch (error) {
+      setFeedback({ text: getClientErrorMessage(error), tone: "error" });
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -94,32 +133,37 @@ export function ListingDraftCard({
     setLoading(true);
     setFeedback(null);
 
-    const response = await fetch("/api/listings/drafts", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "revise",
-        draftId: draft.id,
-        ebayTitle: form.ebayTitle,
-        ebayDescription: form.ebayDescription,
-        price: Number(form.price),
-        quantity: Number(form.quantity),
-        ebayCategoryId: form.ebayCategoryId || null,
-        itemSpecifics,
-        optimizedImageUrls
-      })
-    });
-    const payload = (await response.json()) as { ok?: boolean; error?: string; message?: string };
+    try {
+      const response = await fetchWithTimeout("/api/listings/drafts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "revise",
+          draftId: draft.id,
+          ebayTitle: form.ebayTitle,
+          ebayDescription: form.ebayDescription,
+          price: Number(form.price),
+          quantity: Number(form.quantity),
+          ebayCategoryId: form.ebayCategoryId || null,
+          itemSpecifics,
+          optimizedImageUrls
+        })
+      });
+      const payload = (await response.json()) as { ok?: boolean; error?: string; message?: string };
 
-    setLoading(false);
-    setFeedback({
-      text: payload.ok ? payload.message ?? "Draft revised." : payload.error ?? "Save failed.",
-      tone: payload.ok ? "success" : "error"
-    });
+      setFeedback({
+        text: payload.ok ? payload.message ?? "Draft revised." : payload.error ?? "Save failed.",
+        tone: payload.ok ? "success" : "error"
+      });
 
-    if (payload.ok) {
-      setRevising(false);
-      router.refresh();
+      if (payload.ok) {
+        setRevising(false);
+        router.refresh();
+      }
+    } catch (error) {
+      setFeedback({ text: getClientErrorMessage(error), tone: "error" });
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -167,7 +211,7 @@ export function ListingDraftCard({
           value={draft.marginPercentage == null ? "Not analyzed" : `${draft.marginPercentage.toFixed(1)}%`}
         />
         <Metric
-          label="Readiness"
+          label="Listing quality"
           value={readiness ? `${readiness.score}/100 ${readiness.ready ? "Ready" : "Needs work"}` : "Not checked"}
         />
       </div>
@@ -215,6 +259,9 @@ export function ListingDraftCard({
         </Button>
         <Button variant="secondary" onClick={() => setRevising(true)}>
           <CircleAlert size={16} /> Revise
+        </Button>
+        <Button variant="secondary" onClick={regenerateListingCopy} disabled={loading || draft.status === "published"}>
+          <WandSparkles size={16} /> {loading ? "Working..." : "Regenerate listing copy"}
         </Button>
         <PublishDraftButton
           draftId={draft.id}
@@ -396,4 +443,26 @@ function getPublishDisabledReason(draft: ListingDraft, ebayConnected: boolean) {
   }
 
   return "";
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), CLIENT_LISTING_ACTION_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function getClientErrorMessage(error: unknown) {
+  if (
+    error instanceof DOMException &&
+    (error.name === "AbortError" || error.message.toLowerCase().includes("abort"))
+  ) {
+    return "Request timed out. Try again; the button is safe to reuse.";
+  }
+
+  return error instanceof Error ? error.message : "Request failed. Try again.";
 }

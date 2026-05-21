@@ -23,6 +23,22 @@ export interface EbayOAuthRuntimeInfo {
   marketplaceId: string;
 }
 
+interface EbayFetchInput {
+  path: string;
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  accessToken: string;
+  body?: unknown;
+  marketplaceId?: string;
+  timeoutMs?: number;
+  timeoutCode?: string;
+}
+
+export interface EbayFetchResult<T> {
+  status: number;
+  body: T;
+  locationHeader: string | null;
+}
+
 export function getEbayOAuthRuntimeInfo(): EbayOAuthRuntimeInfo {
   const clientId = getOptionalEnv("EBAY_CLIENT_ID");
   const clientSecret = getOptionalEnv("EBAY_CLIENT_SECRET");
@@ -103,7 +119,13 @@ export function getEbayApiBaseUrl(environment: "sandbox" | "production") {
   return environment === "production" ? "https://api.ebay.com" : "https://api.sandbox.ebay.com";
 }
 
-export async function ebayFetch<T>({
+export async function ebayFetch<T>(input: EbayFetchInput): Promise<T> {
+  const result = await ebayFetchWithMeta<T>(input);
+
+  return result.body;
+}
+
+export async function ebayFetchWithMeta<T>({
   path,
   method = "GET",
   accessToken,
@@ -111,40 +133,36 @@ export async function ebayFetch<T>({
   marketplaceId = process.env.EBAY_MARKETPLACE_ID ?? "EBAY_US",
   timeoutMs,
   timeoutCode
-}: {
-  path: string;
-  method?: "GET" | "POST" | "PUT" | "DELETE";
-  accessToken: string;
-  body?: unknown;
-  marketplaceId?: string;
-  timeoutMs?: number;
-  timeoutCode?: string;
-}): Promise<T> {
+}: EbayFetchInput): Promise<EbayFetchResult<T>> {
   const environment = getEbayConfig().environment;
   const controller = timeoutMs ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let response: Response;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Language": "en-US",
+    "X-EBAY-C-MARKETPLACE-ID": marketplaceId
+  };
+
+  if (body !== undefined || method === "POST" || method === "PUT") {
+    headers["Content-Type"] = "application/json";
+  }
 
   try {
     response = await fetch(`${getEbayApiBaseUrl(environment)}${path}`, {
       method,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        "Content-Language": "en-US",
-        "X-EBAY-C-MARKETPLACE-ID": marketplaceId
-      },
-      body: body ? JSON.stringify(body) : undefined,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller?.signal
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      const code = timeoutCode ?? "PUBLISH_FAILED";
+      const code = "EBAY_TIMEOUT";
       throw new EbayIntegrationError(
         `eBay API request timed out after ${timeoutMs}ms.`,
         code,
-        getEbayErrorRecommendation(code),
-        { path, method, timeoutMs }
+        getEbayErrorRecommendation(timeoutCode ?? code),
+        { path, method, timeoutMs, timeoutCode: timeoutCode ?? null }
       );
     }
 
@@ -162,22 +180,28 @@ export async function ebayFetch<T>({
       `eBay API request failed (${response.status}): ${summarizeEbayError(payload)}`,
       code,
       getEbayErrorRecommendation(code),
-      payload,
+      {
+        path,
+        method,
+        status: response.status,
+        statusText: response.statusText,
+        locationHeader: response.headers.get("location"),
+        responseBody: payload
+      },
       response.status
     );
   }
 
-  if (response.status === 204) {
-    return {} as T;
-  }
+  const locationHeader = response.headers.get("location");
 
   const text = await response.text();
+  const responseBody = text ? (JSON.parse(text) as T) : ({} as T);
 
-  if (!text) {
-    return {} as T;
-  }
-
-  return JSON.parse(text) as T;
+  return {
+    status: response.status,
+    body: responseBody,
+    locationHeader
+  };
 }
 
 async function readEbayErrorPayload(response: Response) {

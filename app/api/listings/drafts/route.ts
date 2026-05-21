@@ -26,6 +26,10 @@ const updateDraftSchema = z.discriminatedUnion("action", [
     draftId: z.string().uuid()
   }),
   z.object({
+    action: z.literal("regenerate_copy"),
+    draftId: z.string().uuid()
+  }),
+  z.object({
     action: z.literal("revise"),
     draftId: z.string().uuid(),
     ebayTitle: z.string().trim().min(5).max(80),
@@ -150,6 +154,56 @@ function describeSupabaseError(error: { message?: string; code?: string }) {
   return message;
 }
 
+function getEmbeddedRow(value: unknown): Record<string, any> | null {
+  if (Array.isArray(value)) {
+    return (value[0] as Record<string, any> | undefined) ?? null;
+  }
+
+  return value && typeof value === "object" ? (value as Record<string, any>) : null;
+}
+
+function mapSupplierProduct(row: Record<string, any>): SupplierProduct {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    supplierId: row.supplier_id,
+    supplierSku: row.supplier_sku,
+    title: row.title,
+    description: row.description,
+    brand: row.brand,
+    category: row.category,
+    supplierPrice: Number(row.supplier_price ?? 0),
+    shippingCost: Number(row.shipping_cost ?? 0),
+    stockQuantity: Number(row.stock_quantity ?? 0),
+    currency: row.currency ?? "USD",
+    productUrl: row.product_url,
+    imageUrls: row.image_urls ?? [],
+    rawData: row.raw_data ?? {},
+    shippingDays: Number(row.shipping_days ?? 5),
+    countryOfOrigin: row.country_of_origin
+  };
+}
+
+function mapProductAnalysis(row: Record<string, any>): ProductAnalysis {
+  return {
+    profitScore: Number(row.profit_score ?? 0),
+    riskScore: Number(row.risk_score ?? 0),
+    demandScore: Number(row.demand_score ?? 0),
+    competitionScore: Number(row.competition_score ?? 0),
+    imageScore: Number(row.image_score ?? 0),
+    shippingScore: Number(row.shipping_score ?? 0),
+    finalScore: Number(row.final_score ?? 0),
+    estimatedEbayFees: Number(row.estimated_ebay_fees ?? 0),
+    estimatedTotalCost: Number(row.estimated_total_cost ?? 0),
+    recommendedEbayPrice: Number(row.recommended_ebay_price ?? 0),
+    estimatedProfit: Number(row.estimated_profit ?? 0),
+    marginPercentage: Number(row.margin_percentage ?? 0),
+    aiNotes: row.ai_notes ?? "",
+    rejectionReasons: Array.isArray(row.rejection_reasons) ? row.rejection_reasons : [],
+    approvedForListing: Boolean(row.approved_for_listing)
+  };
+}
+
 export async function PATCH(request: Request) {
   try {
     const { supabase, user } = await getAuthenticatedApiContext();
@@ -191,6 +245,69 @@ export async function PATCH(request: Request) {
       });
 
       return NextResponse.json({ ok: true, message: "Draft approved.", draft: data });
+    }
+
+    if (payload.action === "regenerate_copy") {
+      const { data: draftRow, error: draftLoadError } = await supabase
+        .from("listing_drafts")
+        .select("id,status,supplier_products(*),product_analysis(*)")
+        .eq("id", payload.draftId)
+        .eq("user_id", user.id)
+        .neq("status", "published")
+        .maybeSingle();
+
+      if (draftLoadError) {
+        throw new Error(draftLoadError.message);
+      }
+
+      if (!draftRow) {
+        return NextResponse.json(
+          { error: "Draft was not found or cannot be regenerated after publishing." },
+          { status: 404 }
+        );
+      }
+
+      const productRow = getEmbeddedRow((draftRow as Record<string, unknown>).supplier_products);
+      const analysisRow = getEmbeddedRow((draftRow as Record<string, unknown>).product_analysis);
+
+      if (!productRow || !analysisRow) {
+        return NextResponse.json(
+          { error: "Regenerate listing copy requires the original supplier product and analysis rows." },
+          { status: 400 }
+        );
+      }
+
+      const generated = await generateListingForDraft(mapSupplierProduct(productRow), mapProductAnalysis(analysisRow));
+      const { data, error } = await supabase
+        .from("listing_drafts")
+        .update({
+          ebay_title: generated.ebayTitle,
+          ebay_description: generated.ebayDescription,
+          item_specifics: generated.itemSpecifics,
+          ai_generated: true,
+          error_message: null,
+          ebay_error_code: null,
+          ebay_error_json: {}
+        })
+        .eq("id", payload.draftId)
+        .eq("user_id", user.id)
+        .select("id,status,ebay_title,ebay_description,item_specifics")
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      await logAutomationEvent({
+        supabase,
+        userId: user.id,
+        level: "success",
+        module: "listing_drafts",
+        message: "Listing copy regenerated.",
+        metadata: { draftId: payload.draftId, warnings: generated.warnings }
+      });
+
+      return NextResponse.json({ ok: true, message: "Listing copy regenerated.", draft: data, generatedListing: generated });
     }
 
     const { data, error } = await supabase

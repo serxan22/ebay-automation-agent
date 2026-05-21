@@ -1,16 +1,13 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAutomationEvent } from "@/lib/automation/logging";
-import { retryFulfillmentPolicyStep } from "@/lib/ebay/policies";
+import { runFulfillmentPolicyDocsTest } from "@/lib/ebay/policies";
 import { normalizePublishError } from "@/lib/ebay/publish";
 import { authErrorResponse, getAuthenticatedApiContext } from "@/lib/supabase/api-auth";
 
-const requestSchema = z.object({
-  attemptIndex: z.number().int().min(0).optional()
-});
+export const maxDuration = 60;
 
-export async function POST(request: Request) {
+export async function POST() {
   let supabase: SupabaseClient | null = null;
   let userId: string | null = null;
 
@@ -18,13 +15,11 @@ export async function POST(request: Request) {
     const context = await getAuthenticatedApiContext();
     supabase = context.supabase;
     userId = context.user.id;
-    const body = await request.json().catch(() => ({}));
-    const payload = requestSchema.parse(body);
-    const result = await retryFulfillmentPolicyStep({
+
+    const result = await runFulfillmentPolicyDocsTest({
       supabase,
       userId,
-      marketplaceId: "EBAY_US",
-      attemptIndex: payload.attemptIndex
+      marketplaceId: "EBAY_US"
     });
 
     return NextResponse.json(result);
@@ -42,7 +37,7 @@ export async function POST(request: Request) {
         userId,
         level: "error",
         module: "ebay_policies",
-        message: "ebay_fulfillment_step_failed",
+        message: "ebay_fulfillment_docs_test_failed",
         metadata: {
           marketplaceId: "EBAY_US",
           error: normalized.message,
@@ -56,17 +51,22 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        completed: false,
-        nextAttemptIndex: null,
-        attempt: null,
-        fulfillmentPolicyStored: false,
-        message: normalized.message,
-        error: normalized.message,
+        schemaVariant: "official_docs_sample",
         code: normalized.code,
-        recommendation: normalized.recommendation,
-        attempts: [],
-        ebayErrors: [],
-        details: normalized.details
+        message: normalized.message,
+        status: null,
+        timedOut: false,
+        timeoutMs: 45_000,
+        endpoint: "/sell/account/v1/fulfillment_policy/",
+        requestBodyUsed: null,
+        responseBody: normalized.details ?? null,
+        locationHeader: null,
+        fulfillmentPolicyId: null,
+        details: normalized.details,
+        recommendation: normalized.recommendation ?? "Review the server logs for the docs fulfillment test failure.",
+        errorSummary: normalized.message,
+        error: normalized.message,
+        ebayErrors: []
       },
       { status: 400 }
     );

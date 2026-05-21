@@ -43,6 +43,7 @@ type BusyAction =
   | "retryFulfillmentStep"
   | "autoFulfillmentSteps"
   | "longFulfillmentTest"
+  | "docsFulfillmentTest"
   | "location"
   | "disconnect"
   | "optIn"
@@ -99,12 +100,32 @@ interface FulfillmentLongTestPayload {
   serviceCode?: string;
   schemaVariant?: string;
   ebayResponse?: unknown;
-  ebayErrors?: Array<{ errorId?: unknown; longMessage?: unknown }>;
+  ebayErrors?: Array<{ errorId?: unknown; message?: unknown; longMessage?: unknown }>;
   recommendation?: string;
   fulfillmentPolicyStored?: boolean;
   message?: string;
   error?: string;
   syncError?: string | null;
+}
+
+interface FulfillmentDocsTestPayload {
+  ok?: boolean;
+  schemaVariant?: string;
+  code?: string | null;
+  message?: string | null;
+  status?: number | null;
+  timedOut?: boolean;
+  timeoutMs?: number;
+  endpoint?: string;
+  requestBodyUsed?: unknown;
+  responseBody?: unknown;
+  locationHeader?: string | null;
+  fulfillmentPolicyId?: string | null;
+  details?: unknown;
+  recommendation?: string;
+  errorSummary?: string | null;
+  ebayErrors?: Array<{ errorId?: unknown; message?: unknown; longMessage?: unknown }>;
+  error?: string;
 }
 
 interface PolicyAttemptRecord {
@@ -143,6 +164,7 @@ export function EbayConnectPanel({
   const [programLoading, setProgramLoading] = useState(false);
   const [shippingServices, setShippingServices] = useState<ShippingServiceSummary[] | null>(null);
   const [policyAttemptDetails, setPolicyAttemptDetails] = useState<PolicyAttemptDetails | null>(null);
+  const [docsFulfillmentResult, setDocsFulfillmentResult] = useState<FulfillmentDocsTestPayload | null>(null);
   const [fulfillmentStepIndex, setFulfillmentStepIndex] = useState(0);
   const [fulfillmentStepHistory, setFulfillmentStepHistory] = useState<PolicyAttemptRecord[]>([]);
   const hasAllSellerPolicies = Boolean(paymentPolicy && returnPolicy && fulfillmentPolicy);
@@ -230,7 +252,7 @@ export function EbayConnectPanel({
           ? action === "policies"
             ? "Seller policies synced from eBay sandbox."
             : "Inventory location checked and saved."
-          : payload.code === "SELLING_POLICY_NOT_OPTED_IN"
+          : payload.code === "BUSINESS_POLICY_NOT_ELIGIBLE" || payload.code === "SELLING_POLICY_NOT_OPTED_IN"
             ? "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again."
           : joinErrorAndRecommendation(payload.error ?? "Action failed.", payload.recommendation)
       );
@@ -315,7 +337,7 @@ export function EbayConnectPanel({
     setMessage("");
 
     try {
-      let nextIndex: number | null = fulfillmentStepHistory.length ? fulfillmentStepIndex : null;
+      let nextIndex: number | null = fulfillmentStepHistory.length ? fulfillmentStepIndex : 0;
       let lastPayload: FulfillmentStepPayload | null = null;
 
       for (let step = 0; step < 8 && nextIndex != null; step += 1) {
@@ -407,6 +429,42 @@ export function EbayConnectPanel({
       setMessage(getClientFetchErrorMessage(error));
     } finally {
       setBusy((current) => (current === "longFulfillmentTest" ? null : current));
+    }
+  }
+
+  async function runDocsFulfillmentTest() {
+    setBusy("docsFulfillmentTest");
+    setMessage("");
+
+    try {
+      const response = await fetchWithTimeout(
+        "/api/ebay/policies/fulfillment-docs-test",
+        { method: "POST" },
+        CLIENT_LONG_TEST_TIMEOUT_MS
+      );
+      const payload = await readJsonPayload<FulfillmentDocsTestPayload>(response);
+      setDocsFulfillmentResult(payload);
+      setMessageTone(payload.ok ? "success" : "error");
+      setMessage(
+        payload.ok
+          ? `Official docs fulfillment test succeeded.${payload.fulfillmentPolicyId ? ` Policy ID: ${payload.fulfillmentPolicyId}.` : ""}`
+          : payload.timedOut
+            ? "The official eBay docs sample also timed out. This strongly suggests an eBay sandbox Account API issue or account-specific fulfillment-policy issue."
+            : joinErrorAndRecommendation(
+                payload.errorSummary ?? payload.error ?? "Official docs fulfillment test failed.",
+                payload.recommendation
+              )
+      );
+
+      if (payload.ok) {
+        router.refresh();
+      }
+    } catch (error) {
+      await logPolicyUiTimeoutIfNeeded(error);
+      setMessageTone("error");
+      setMessage(getClientFetchErrorMessage(error));
+    } finally {
+      setBusy((current) => (current === "docsFulfillmentTest" ? null : current));
     }
   }
 
@@ -630,9 +688,11 @@ export function EbayConnectPanel({
           onRetryNext={() => retryFulfillmentPolicyStep()}
           onAutoRun={autoRunFulfillmentSteps}
           onLongTest={runLongFulfillmentTest}
+          onDocsTest={runDocsFulfillmentTest}
         />
       ) : null}
       {shippingServices?.length ? <ShippingServicesPanel services={shippingServices} /> : null}
+      {docsFulfillmentResult ? <DocsFulfillmentTestResultPanel result={docsFulfillmentResult} /> : null}
       {policyAttemptDetails ? <PolicyAttemptDetailsPanel details={policyAttemptDetails} /> : null}
 
       {warningMessage ? (
@@ -653,7 +713,8 @@ function ManualFulfillmentFallback({
   busy,
   onRetryNext,
   onAutoRun,
-  onLongTest
+  onLongTest,
+  onDocsTest
 }: {
   stepIndex: number;
   history: PolicyAttemptRecord[];
@@ -661,6 +722,7 @@ function ManualFulfillmentFallback({
   onRetryNext: () => void;
   onAutoRun: () => void;
   onLongTest: () => void;
+  onDocsTest: () => void;
 }) {
   return (
     <div className="mt-4 rounded-md border border-ink-200 bg-ink-50 p-4 text-sm text-ink-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-ink-200">
@@ -680,9 +742,12 @@ function ManualFulfillmentFallback({
         <Button variant="secondary" onClick={onLongTest} disabled={busy === "longFulfillmentTest"}>
           <RefreshCcw size={16} /> {busy === "longFulfillmentTest" ? "Testing..." : "Run long fulfillment test"}
         </Button>
+        <Button variant="secondary" onClick={onDocsTest} disabled={busy === "docsFulfillmentTest"}>
+          <RefreshCcw size={16} /> {busy === "docsFulfillmentTest" ? "Testing..." : "Run docs fulfillment test"}
+        </Button>
       </div>
       <p className="mt-3 text-xs opacity-80">
-        The long test tries one USPSFirstClass buyer-paid policy with a longer server timeout, then syncs seller policies once.
+        The docs test is separate from retries and uses only the trailing-slash endpoint with the official USPSPriorityFlatRateBox free-shipping body.
         Offer publish remains blocked until a real fulfillment policy ID exists.
       </p>
       {history.length ? (
@@ -714,6 +779,56 @@ function ShippingServicesPanel({ services }: { services: ShippingServiceSummary[
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function DocsFulfillmentTestResultPanel({ result }: { result: FulfillmentDocsTestPayload }) {
+  const detailPayload = {
+    requestBodyUsed: result.requestBodyUsed,
+    responseBody: result.responseBody,
+    ebayErrors: result.ebayErrors,
+    details: result.details
+  };
+
+  return (
+    <div className="mt-4 rounded-md border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-100">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-semibold">Docs fulfillment test result</p>
+          <p className="mt-1 text-xs opacity-80">
+            Official sample only: USPSPriorityFlatRateBox / official_docs_sample.
+          </p>
+        </div>
+        <span className="rounded-md bg-white/70 px-2 py-1 text-xs font-semibold dark:bg-white/[0.08]">
+          {result.ok ? "success" : result.timedOut ? "timeout" : "failed"}
+        </span>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <DocsResultField label="schemaVariant" value={result.schemaVariant ?? "official_docs_sample"} />
+        <DocsResultField label="endpoint" value={result.endpoint ?? "/sell/account/v1/fulfillment_policy/"} />
+        <DocsResultField label="status" value={result.status == null ? "null" : String(result.status)} />
+        <DocsResultField label="timedOut" value={String(Boolean(result.timedOut))} />
+        <DocsResultField label="fulfillmentPolicyId" value={result.fulfillmentPolicyId ?? "null"} />
+        <DocsResultField label="locationHeader" value={result.locationHeader ?? "null"} />
+      </div>
+      <p className="mt-3 font-medium">Recommendation</p>
+      <p className="mt-1 text-xs opacity-90">{result.recommendation ?? result.message ?? result.error ?? "No recommendation returned."}</p>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-semibold">Request, response, and eBay errors</summary>
+        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-md bg-ink-950 p-3 text-xs text-white">
+          {JSON.stringify(detailPayload, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function DocsResultField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-white/70 p-2 dark:bg-white/[0.06]">
+      <p className="text-xs font-semibold opacity-70">{label}</p>
+      <p className="mt-1 break-words font-mono text-xs">{value}</p>
     </div>
   );
 }

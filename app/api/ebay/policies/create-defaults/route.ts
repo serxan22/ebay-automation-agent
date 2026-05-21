@@ -76,7 +76,8 @@ export async function POST() {
         message: normalized.message,
         code: normalized.code,
         recommendation: normalized.recommendation,
-        attempts: []
+        attempts: [],
+        details: normalized.details
       },
       { status: 400 }
     );

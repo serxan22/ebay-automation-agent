@@ -17,7 +17,11 @@ export async function GET() {
     return NextResponse.json(
       {
         ok: false,
-        error: error instanceof Error ? error.message : "System health check failed."
+        error: error instanceof Error ? error.message : "System health check failed.",
+        message: error instanceof Error ? error.message : "System health check failed.",
+        code: "SYSTEM_HEALTH_FAILED",
+        recommendation: "Refresh the dashboard and inspect recent automation logs.",
+        details: null
       },
       { status: 400 }
     );

@@ -6,6 +6,8 @@ import { Send } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import type { ListingDraftStatus } from "@/lib/types";
 
+const CLIENT_PUBLISH_TIMEOUT_MS = 25_000;
+
 export function PublishDraftButton({
   draftId,
   status,
@@ -47,38 +49,42 @@ export function PublishDraftButton({
     setLoading(true);
     setMessage("");
 
-    const response = await fetch(`/api/listings/${draftId}/publish`, {
-      method: "POST"
-    });
-    const payload = (await response.json()) as {
-      ok?: boolean;
-      result?: { listingId: string; offerId: string; sku: string };
-      error?: string;
-      code?: string;
-      recommendation?: string;
-    };
+    try {
+      const response = await fetchWithTimeout(`/api/listings/${draftId}/publish`, {
+        method: "POST"
+      });
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        result?: { listingId: string; offerId: string; sku: string };
+        error?: string;
+        code?: string;
+        recommendation?: string;
+      };
 
-    setLoading(false);
+      if (payload.ok && payload.result) {
+        setMessage(
+          `Sandbox listing published. Item ${payload.result.listingId}, offer ${payload.result.offerId}, SKU ${payload.result.sku}.`
+        );
+        router.refresh();
+        return;
+      }
 
-    if (payload.ok && payload.result) {
+      const isDisconnected =
+        payload.code === "TOKEN_EXPIRED" && /not connected|token|connect/i.test(payload.error ?? "");
+
       setMessage(
-        `Sandbox listing published. Item ${payload.result.listingId}, offer ${payload.result.offerId}, SKU ${payload.result.sku}.`
+        isDisconnected
+          ? "Connect eBay sandbox first in Settings."
+          : `${payload.code ? `${payload.code}: ` : ""}${payload.error ?? "Publish failed."} ${
+              payload.recommendation ?? ""
+            }`
       );
       router.refresh();
-      return;
+    } catch (error) {
+      setMessage(getClientErrorMessage(error));
+    } finally {
+      setLoading(false);
     }
-
-    const isDisconnected =
-      payload.code === "TOKEN_EXPIRED" && /not connected|token|connect/i.test(payload.error ?? "");
-
-    setMessage(
-      isDisconnected
-        ? "Connect eBay sandbox first in Settings."
-        : `${payload.code ? `${payload.code}: ` : ""}${payload.error ?? "Publish failed."} ${
-            payload.recommendation ?? ""
-          }`
-    );
-    router.refresh();
   }
 
   return (
@@ -91,4 +97,26 @@ export function PublishDraftButton({
       ) : null}
     </div>
   );
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), CLIENT_PUBLISH_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function getClientErrorMessage(error: unknown) {
+  if (
+    error instanceof DOMException &&
+    (error.name === "AbortError" || error.message.toLowerCase().includes("abort"))
+  ) {
+    return "Publish request timed out. No success was assumed; retry after checking readiness.";
+  }
+
+  return error instanceof Error ? error.message : "Publish request failed.";
 }

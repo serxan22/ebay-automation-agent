@@ -15,6 +15,7 @@ export function SystemHealthCard({ health }: { health: SystemHealthSummary }) {
           <div>
             <h2 className="font-semibold text-ink-950 dark:text-white">System health</h2>
             <p className="mt-1 text-sm text-ink-500 dark:text-ink-400">{health.suggestedNextAction}</p>
+            <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{health.publishReadiness}</p>
           </div>
         </div>
         <StatusBadge status={getStatusLabel(health.status)} tone={getStatusTone(health.status)} />
@@ -30,7 +31,7 @@ export function SystemHealthCard({ health }: { health: SystemHealthSummary }) {
       </div>
 
       <div className="mt-5 grid gap-2 md:grid-cols-2">
-        {health.checks.slice(0, 10).map((check) => (
+        {health.checks.map((check) => (
           <div key={check.key} className="rounded-md bg-ink-50 p-3 dark:bg-white/[0.04]">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-medium text-ink-800 dark:text-ink-100">{check.label}</p>
@@ -44,8 +45,9 @@ export function SystemHealthCard({ health }: { health: SystemHealthSummary }) {
         ))}
       </div>
 
-      {health.lastAutomationError || health.lastEbayError ? (
+      {health.lastBlockingIssue || health.lastAutomationError || health.lastEbayError ? (
         <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100">
+          {health.lastBlockingIssue ? <p>Last blocking issue: {health.lastBlockingIssue}</p> : null}
           {health.lastAutomationError ? <p>Last automation error: {health.lastAutomationError}</p> : null}
           {health.lastEbayError ? <p>Last integration warning: {health.lastEbayError}</p> : null}
         </div>

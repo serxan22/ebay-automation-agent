@@ -123,11 +123,18 @@ export async function validateListingReadiness({
       missing.push("return policy");
     }
 
-    if (!account.fulfillment_policy_id && !sandboxPolicyFallbackAllowed) {
+    if (!account.fulfillment_policy_id) {
       missing.push("fulfillment policy");
-    } else if (!account.fulfillment_policy_id && sandboxPolicyFallbackAllowed) {
+      if (sandboxPolicyFallbackAllowed) {
+        warnings.push(
+          "Sandbox fallback is enabled for diagnostics, but real offer publish is blocked until a real fulfillment policy exists."
+        );
+      }
+    }
+
+    if (!account.fulfillment_policy_id && sandboxPolicyFallbackAllowed) {
       warnings.push(
-        "Sandbox policy fallback is enabled for readiness and inventory diagnostics only. Offer publish is blocked until fulfillment policy exists. Production remains blocked."
+        "Drafts, image checks, and readiness diagnostics can continue. createOffer and publishOffer stay blocked."
       );
     }
 

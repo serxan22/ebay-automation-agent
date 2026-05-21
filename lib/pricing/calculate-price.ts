@@ -4,7 +4,7 @@ export interface PriceCalculationInput {
   product: SupplierProduct;
   settings: Pick<
     AutomationSettings,
-    "minMarginPercentage" | "pricingBufferPercentage" | "promotedListingPercentage"
+    "minMarginPercentage" | "minProfitAmount" | "pricingBufferPercentage" | "promotedListingPercentage"
   >;
   estimatedFeeRate?: number;
 }
@@ -22,7 +22,10 @@ export function calculatePrice({
   const bufferRate = Math.max(settings.pricingBufferPercentage, 0) / 100;
   const variableRate = estimatedFeeRate + promotedRate + bufferRate + targetMargin;
   const denominator = Math.max(1 - variableRate, 0.1);
-  const recommendedEbayPrice = roundMoney(Math.max(totalCost / denominator, totalCost + 1));
+  const minProfitDenominator = Math.max(1 - estimatedFeeRate - promotedRate - bufferRate, 0.1);
+  const marginTargetPrice = totalCost / denominator;
+  const minProfitTargetPrice = (totalCost + Math.max(settings.minProfitAmount, 0)) / minProfitDenominator;
+  const recommendedEbayPrice = roundMoney(Math.max(marginTargetPrice, minProfitTargetPrice, totalCost + 1));
   const estimatedEbayFees = roundMoney(recommendedEbayPrice * estimatedFeeRate);
   const promotedCost = roundMoney(recommendedEbayPrice * promotedRate);
   const buffer = roundMoney(recommendedEbayPrice * bufferRate);

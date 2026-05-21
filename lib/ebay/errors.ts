@@ -19,9 +19,16 @@ export function getEbayErrorRecommendation(code: string) {
     OAUTH_STATE_EXPIRED: "Start eBay sandbox connection again; OAuth state links expire after 15 minutes.",
     TOKEN_EXCHANGE_FAILED: "Confirm EBAY_RUNAME matches the eBay Developer portal RuName and retry Connect sandbox.",
     TOKEN_EXPIRED: "Reconnect eBay or refresh the OAuth token before publishing.",
+    EBAY_TIMEOUT: "Retry the bounded sandbox request. If repeated fulfillment requests time out, run the official docs fulfillment test.",
+    EBAY_INTERNAL_ERROR:
+      "eBay returned an internal sandbox API error. Run the official docs fulfillment test and keep publishing blocked until eBay creates a real fulfillment policy.",
     PUBLISH_READINESS_FAILED: "Fix the listed readiness issues before publishing to eBay sandbox.",
+    BUSINESS_POLICY_NOT_ELIGIBLE:
+      "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again.",
     SELLING_POLICY_NOT_OPTED_IN:
       "Your sandbox seller is not opted into Selling Policy Management. Click Enable seller policies, wait if needed, then sync again.",
+    MISSING_POLICY:
+      "Business Policies are active, but no payment/return/fulfillment policies exist yet. Click Create default seller policies or create them manually in seller settings.",
     MISSING_POLICY_ID:
       "Business Policies are active, but no payment/return/fulfillment policies exist yet. Click Create default seller policies or create them manually in seller settings.",
     MISSING_LOCATION: "Create or select an eBay inventory location key.",
@@ -57,23 +64,27 @@ export function classifyEbayError(status: number, payload: unknown) {
     return "RATE_LIMIT";
   }
 
+  if (isEbayInternalApplicationError(status, payload)) {
+    return "EBAY_INTERNAL_ERROR";
+  }
+
   if (/shipping service|domesticshippingservice|shippingservicecode|shippingservice/.test(text)) {
     return "INVALID_SHIPPING_SERVICE";
   }
 
   if (isSellingPolicyManagementEligibilityError(payload)) {
-    return "SELLING_POLICY_NOT_OPTED_IN";
+    return "BUSINESS_POLICY_NOT_ELIGIBLE";
   }
 
   if (/policy|paymentpolicyid|returnpolicyid|fulfillmentpolicyid|business polic/.test(text)) {
-    return "MISSING_POLICY_ID";
+    return "MISSING_POLICY";
   }
 
   if (/merchantlocationkey|inventory location|location key|merchant location|warehouse|postal|address|location/.test(text)) {
     return "MISSING_LOCATION";
   }
 
-  if (/category|categoryid/.test(text)) {
+  if (/invalid category|category.*invalid|categoryid.*invalid|category id.*invalid/.test(text)) {
     return "INVALID_CATEGORY";
   }
 
@@ -99,7 +110,19 @@ export function classifyEbayError(status: number, payload: unknown) {
 export function isSellingPolicyManagementEligibilityError(payload: unknown) {
   const text = stringifyEbayPayload(payload).toLowerCase();
 
-  return text.includes("user is not eligible for business policy");
+  return (
+    text.includes("user is not eligible for business policy") ||
+    (/20403/.test(text) && /business polic/.test(text) && /eligib|opted|opt in|opt-in/.test(text))
+  );
+}
+
+export function isEbayInternalApplicationError(status: number, payload: unknown) {
+  const text = stringifyEbayPayload(payload).toLowerCase();
+
+  return (
+    (status >= 500 && status <= 599 && /20500/.test(text)) ||
+    (status >= 500 && /internal application error|internal server error/.test(text))
+  );
 }
 
 export function stringifyEbayPayload(payload: unknown) {

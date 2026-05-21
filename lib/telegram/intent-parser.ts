@@ -22,6 +22,7 @@ export const TelegramIntentNameSchema = z.enum([
   "REVISE_DRAFT_HELP",
   "SHOW_EBAY_READINESS",
   "DISCOVER_SHIPPING_SERVICES",
+  "RUN_FULFILLMENT_DOCS_TEST",
   "RETRY_FULFILLMENT_STEP",
   "SYNC_EBAY_POLICIES",
   "CREATE_DEFAULT_EBAY_POLICIES",
@@ -313,6 +314,14 @@ export function parseTelegramIntentHeuristically(
       parameters: { ...parameters, user_question: message },
       confidence: 0.9,
       safe_response: "Sandbox shipping services yoxlanılır."
+    });
+  }
+
+  if (/docs fulfillment test|official docs.*fulfillment|fulfillment docs|docs test/.test(text)) {
+    return makeIntent("RUN_FULFILLMENT_DOCS_TEST", language, {
+      parameters: { ...parameters, user_question: message },
+      confidence: 0.92,
+      safe_response: "Official docs fulfillment test işə salınır."
     });
   }
 
@@ -717,7 +726,9 @@ export const telegramIntentExamples: Array<{ message: string; expectedIntent: Te
   { message: "draftlarımı göstər", expectedIntent: "SHOW_LISTING_DRAFTS" },
   { message: "listing draftlarım var?", expectedIntent: "SHOW_LISTING_DRAFTS" },
   { message: "approved draftları göstər", expectedIntent: "SHOW_LISTING_DRAFTS" },
-  { message: "safe draftları approve et", expectedIntent: "APPROVE_DRAFTS" }
+  { message: "safe draftları approve et", expectedIntent: "APPROVE_DRAFTS" },
+  { message: "docs fulfillment test elə", expectedIntent: "RUN_FULFILLMENT_DOCS_TEST" },
+  { message: "10 dənə məhsul tap bu supplierdan və 20 faiz profitlə listing hazırla", expectedIntent: "CREATE_LISTING_DRAFTS" }
 ];
 
 export function runTelegramIntentExamples() {
@@ -870,6 +881,7 @@ function coerceDraftIntentForMessage(intent: TelegramIntent, message: string) {
       ...intent.parameters,
       draft_source: intent.parameters.draft_source ?? draftSource,
       quantity: intent.parameters.quantity ?? extractQuantity(text) ?? null,
+      min_margin_percentage: intent.parameters.min_margin_percentage ?? extractMargin(text) ?? null,
       user_question: intent.parameters.user_question ?? message
     },
     safe_response: intent.safe_response || "Safe məhsullardan listing draftları yaradacam."
@@ -1059,7 +1071,7 @@ function extractDraftStatus(text: string) {
 }
 
 function isCreateDraftRequest(text: string) {
-  return /(draft|listing draft|qaralama|taslak)/.test(text) &&
+  return /(draft|listing|listing draft|qaralama|taslak)/.test(text) &&
     /(create|yarat|olustur|oluştur|hazirla|hazırla|analyz|analyse|analyze|analiz)/.test(text);
 }
 

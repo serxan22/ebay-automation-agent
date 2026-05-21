@@ -47,6 +47,9 @@ export async function GET() {
         "ebay_fulfillment_long_test_failed",
         "ebay_fulfillment_long_test_success",
         "ebay_fulfillment_long_test_inconclusive",
+        "ebay_fulfillment_docs_test_started",
+        "ebay_fulfillment_docs_test_success",
+        "ebay_fulfillment_docs_test_failed",
         "ebay_default_fulfillment_policy_attempt",
         "ebay_default_fulfillment_policy_attempt_failed",
         "ebay_default_fulfillment_policy_failed",
@@ -64,6 +67,7 @@ export async function GET() {
     };
 
     return NextResponse.json({
+      ok: true,
       connected: true,
       businessPoliciesActive: optedInProgramTypes.includes(SELLING_POLICY_MANAGEMENT),
       paymentPoliciesCount: policies.payment.paymentPolicies.length,
@@ -92,8 +96,13 @@ export async function GET() {
 
     return NextResponse.json(
       {
+        ok: false,
         connected: false,
-        error: error instanceof Error ? error.message : "Could not load eBay policy diagnostics."
+        error: error instanceof Error ? error.message : "Could not load eBay policy diagnostics.",
+        message: error instanceof Error ? error.message : "Could not load eBay policy diagnostics.",
+        code: "EBAY_POLICY_DEBUG_FAILED",
+        recommendation: "Reconnect sandbox OAuth, then rerun policy diagnostics from Settings.",
+        details: null
       },
       { status: 400 }
     );
@@ -130,6 +139,8 @@ function summarizePolicyAttemptLog(metadata: unknown) {
     schemaVariant: record.schemaVariant,
     status: record.status,
     timeoutMs: record.timeoutMs,
+    endpoint: record.endpoint,
+    locationHeader: record.locationHeader,
     message: record.message,
     ebayErrors: record.ebayErrors,
     error: record.error,

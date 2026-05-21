@@ -62,7 +62,8 @@ export async function POST() {
         fulfillmentPolicyStored: false,
         message: normalized.message,
         error: normalized.message,
-        code: normalized.code
+        code: normalized.code,
+        details: normalized.details
       },
       { status: 400 }
     );
