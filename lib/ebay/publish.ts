@@ -129,9 +129,7 @@ export async function publishListingDraftToEbaySandbox({
     validateAccountForPublish(account);
 
     const sku = buildEbaySku(draft, product?.supplier_sku ?? undefined);
-    const { aspects,
-      brand,
-      mpn, brand, mpn } = ensureBrandMpn(sanitizeAspects(draft.item_specifics ?? {}));
+    const { aspects, brand, mpn } = ensureBrandMpn(sanitizeAspects(draft.item_specifics ?? {}));
     const categoryId = draft.ebay_category_id ?? "";
 
     await updateDraftAttempt({ supabase, userId, draftId, attempt, status: "approved" });
