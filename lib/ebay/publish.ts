@@ -471,11 +471,21 @@ function ensureBrandMpn(aspects: Record<string, string[]>): {
 } {
   const next: Record<string, string[]> = { ...aspects };
 
+  // eBay Inventory API can reject unsupported/scraped attributes.
+  // This category requires Brand, MPN, and Type — not Format.
+  for (const key of Object.keys(next)) {
+    if (key.toLowerCase() === "format") {
+      delete next[key];
+    }
+  }
+
   const brand = getFirstAspectValue(next, "Brand") || "Unbranded";
   const mpn = getFirstAspectValue(next, "MPN") || "Does Not Apply";
+  const type = getFirstAspectValue(next, "Type") || "Organizer";
 
   next.Brand = [brand];
   next.MPN = [mpn];
+  next.Type = [type];
 
   return { aspects: next, brand, mpn };
 }
