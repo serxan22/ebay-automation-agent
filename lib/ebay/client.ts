@@ -141,6 +141,7 @@ export async function ebayFetchWithMeta<T>({
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Language": "en-US",
+    "Accept-Language": "en-US",
     "X-EBAY-C-MARKETPLACE-ID": marketplaceId
   };
 
