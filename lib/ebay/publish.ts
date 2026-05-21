@@ -143,6 +143,8 @@ export async function publishListingDraftToEbaySandbox({
       quantity: draft.quantity,
       imageUrls: draft.optimized_image_urls,
       condition: normalizeCondition(draft.condition),
+      brand,
+      mpn,
       aspects,
       brand: typeof aspects.Brand === "string" ? aspects.Brand : product?.brand ?? undefined
     });
