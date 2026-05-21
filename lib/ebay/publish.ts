@@ -187,7 +187,7 @@ export async function publishListingDraftToEbaySandbox({
     });
 
     const published = await publishOffer(accessToken, offer.offerId);
-    const listingId = published.listingId;
+    const listingId = published.listingId ?? offer.offerId;
 
     await supabase
       .from("listing_drafts")

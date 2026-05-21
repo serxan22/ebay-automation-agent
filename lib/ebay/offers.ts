@@ -1,5 +1,4 @@
 import { ebayFetch } from "@/lib/ebay/client";
-import { EbayIntegrationError } from "@/lib/ebay/errors";
 
 export interface EbayOfferInput {
   sku: string;
@@ -7,84 +6,161 @@ export interface EbayOfferInput {
   format?: "FIXED_PRICE";
   availableQuantity: number;
   categoryId: string;
-  listingDescription: string;
+  listingDescription?: string | null;
   price: number;
-  currency: string;
+  currency?: string | null;
   merchantLocationKey: string;
   paymentPolicyId: string;
   returnPolicyId: string;
   fulfillmentPolicyId: string;
 }
 
+function normalizeCurrency(currency?: string | null) {
+  const value = String(currency ?? "").trim().toUpperCase();
+  return value || "USD";
+}
 
-function normalizeOfferInput(input: EbayOfferInput): EbayOfferInput {
+function normalizePrice(price: number) {
+  const value = Number(price);
+
+  if (!Number.isFinite(value) || value <= 0) {
+    return "1.00";
+  }
+
+  return value.toFixed(2);
+}
+
+function normalizeQuantity(quantity: number) {
+  const value = Number(quantity);
+
+  if (!Number.isFinite(value) || value <= 0) {
+    return 1;
+  }
+
+  return Math.floor(value);
+}
+
+function buildOfferBody(input: EbayOfferInput) {
   return {
-    ...input,
+    sku: input.sku,
+    marketplaceId: input.marketplaceId,
     format: input.format ?? "FIXED_PRICE",
-    currency: input.currency || "USD",
-    price: Number(input.price || 1),
+    availableQuantity: normalizeQuantity(input.availableQuantity),
+    categoryId: input.categoryId,
+    listingDescription: input.listingDescription || undefined,
+    merchantLocationKey: input.merchantLocationKey,
+    listingPolicies: {
+      paymentPolicyId: input.paymentPolicyId,
+      returnPolicyId: input.returnPolicyId,
+      fulfillmentPolicyId: input.fulfillmentPolicyId,
+    },
+    pricingSummary: {
+      price: {
+        value: normalizePrice(input.price),
+        currency: normalizeCurrency(input.currency),
+      },
+    },
   };
 }
 
-export async function createOffer(accessToken: string, input: EbayOfferInput) {
-  const normalizedInput = normalizeOfferInput(input);
-
-  try {
-    return await ebayFetch<{ offerId: string }>({
-      accessToken,
-      method: "POST",
-      path: "/sell/inventory/v1/offer",
-      body: normalizedInput,
-    });
-  } catch (error) {
-    const anyError = error as {
-      ebay?: {
-        responseBody?: {
-          errors?: Array<{
-            message?: string;
-            parameters?: Array<{ name?: string; value?: string }>;
-          }>;
-        };
+function extractExistingOfferId(error: unknown): string | undefined {
+  const directBody = (error as {
+    ebay?: {
+      responseBody?: {
+        errors?: Array<{
+          message?: string;
+          parameters?: Array<{ name?: string; value?: string }>;
+        }>;
       };
-      message?: string;
     };
+  })?.ebay?.responseBody;
 
-    const ebayErrors = anyError.ebay?.responseBody?.errors ?? [];
-    const existingOfferId = ebayErrors
-      .find((item) => item.message?.toLowerCase().includes("offer entity already exists"))
-      ?.parameters?.find((parameter) => parameter.name === "offerId")?.value;
+  const directErrors = directBody?.errors ?? [];
 
-    if (existingOfferId) {
-      await updateOffer(accessToken, existingOfferId, normalizedInput);
-      return { offerId: existingOfferId };
+  for (const item of directErrors) {
+    const message = item.message?.toLowerCase() ?? "";
+
+    if (!message.includes("offer entity already exists")) {
+      continue;
     }
 
-    throw error;
+    const offerId = item.parameters?.find((parameter) => parameter.name === "offerId")?.value;
+
+    if (offerId) {
+      return offerId;
+    }
   }
+
+  const asText = JSON.stringify(error);
+
+  if (!asText.toLowerCase().includes("offer entity already exists")) {
+    return undefined;
+  }
+
+  const match = asText.match(/"name"\s*:\s*"offerId"\s*,\s*"value"\s*:\s*"([^"]+)"/);
+
+  return match?.[1];
 }
 
+export async function getOffer(accessToken: string, offerId: string) {
+  if (!offerId) {
+    throw new Error("Missing eBay offer id");
+  }
+
+  return ebayFetch<unknown>({
+    accessToken,
+    method: "GET",
+    path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
+  });
+}
 
 export async function updateOffer(accessToken: string, offerId: string, input: EbayOfferInput) {
   if (!offerId) {
     throw new Error("Missing eBay offer id");
   }
 
-  return ebayFetch<{ offerId: string }>({
+  await ebayFetch<unknown>({
     accessToken,
     method: "PUT",
     path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
-    body: normalizeOfferInput(input),
+    body: buildOfferBody(input),
   });
+
+  return { offerId };
+}
+
+export async function createOffer(accessToken: string, input: EbayOfferInput) {
+  const body = buildOfferBody(input);
+
+  try {
+    return await ebayFetch<{ offerId: string }>({
+      accessToken,
+      method: "POST",
+      path: "/sell/inventory/v1/offer",
+      body,
+    });
+  } catch (error) {
+    const existingOfferId = extractExistingOfferId(error);
+
+    if (!existingOfferId) {
+      throw error;
+    }
+
+    await getOffer(accessToken, existingOfferId);
+    await updateOffer(accessToken, existingOfferId, input);
+
+    return { offerId: existingOfferId };
+  }
 }
 
 export async function publishOffer(accessToken: string, offerId: string) {
   if (!offerId) {
-    throw new EbayIntegrationError("Offer ID is required before publishing.", "PUBLISH_FAILED");
+    throw new Error("Missing eBay offer id");
   }
 
-  return ebayFetch<{ listingId: string }>({
+  return ebayFetch<{ listingId?: string }>({
     accessToken,
+    method: "POST",
     path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish`,
-    method: "POST"
   });
 }
