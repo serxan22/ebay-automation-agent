@@ -37,8 +37,11 @@ export async function createOrReplaceInventoryItem(accessToken: string, input: I
         title: input.title,
         description: input.description,
         imageUrls: input.imageUrls,
-        aspects: input.aspects,
-        brand: input.brand
+        aspects: {
+          ...input.aspects,
+          Brand: input.brand ? [input.brand] : input.aspects.Brand,
+          MPN: input.mpn ? [input.mpn] : input.aspects.MPN,
+        }
       }
     }
   });
