@@ -22,7 +22,10 @@ export async function createOffer(accessToken: string, input: EbayOfferInput) {
       accessToken,
       method: "POST",
       path: "/sell/inventory/v1/offer",
-      body: input,
+      body: {
+        ...input,
+        format: input.format ?? "FIXED_PRICE",
+      },
     });
   } catch (error) {
     const responseBody = (error as { ebay?: { responseBody?: unknown } })?.ebay?.responseBody as
